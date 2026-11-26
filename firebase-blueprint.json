@@ -164,6 +164,58 @@
         "equippedAuraId",
         "updatedAt"
       ]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private per-account save state storing the player's username, rolled aura storage, equipped aura, and total roll count.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Player's display username saved to their account."
+        },
+        "equippedAuraId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Currently equipped aura ID, or empty string if none."
+        },
+        "totalRolls": {
+          "type": "number",
+          "description": "Cumulative number of rolls recorded on this account."
+        },
+        "storage": {
+          "type": "array",
+          "description": "Bounded list of rolled/owned aura entries saved to this account."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account save was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account save was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "username",
+        "equippedAuraId",
+        "totalRolls",
+        "storage",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -184,6 +236,12 @@
         "$ref": "#/entities/PlayerPresence"
       },
       "description": "Shared-server multiplayer presence and transform state for online players on the Baseplate."
+    },
+    "/accounts/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Private per-account aura storage, equipped aura, username, and roll stats."
     }
   }
 }

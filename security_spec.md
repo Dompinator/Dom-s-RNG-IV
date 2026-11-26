@@ -7,7 +7,8 @@
 4. `createdAt` and `authorUid` are immutable after creation; `createdAt == request.time` on create and `updatedAt == request.time` on create and update.
 5. Exact allowed and required keys are enforced on `create` (`hasAll` + `hasOnly`), and `affectedKeys().hasOnly(...)` is enforced on `update`.
 6. Native Maps and Lists are used for `project` (never JSON strings), with bounded string sizes (`name` 1..64, `description` 0..240) and bounded `project.layers` size (`<= 64`).
-7. Every `/players/{sessionId}` document contains zero PII (no email, phone, or profile URL), is owned by `ownerUid == request.auth.uid` (verified Google Auth user), enforces world coordinate bounds (`x/z` within `[-80, 80]`, `y` within `[-5, 60]`), strict pose enum (`idle|walk|jump|levitate|levitate_walk`), `displayName` 1..24 chars, `equippedAuraId` `<= 128` chars, and server `updatedAt == request.time`.
+7. Every `/players/{sessionId}` document contains zero PII (no email, phone, or profile URL), is owned by `ownerUid == request.auth.uid` (verified user), enforces world coordinate bounds (`x/z` within `[-80, 80]`, `y` within `[-5, 60]`), strict pose enum (`idle|walk|jump|levitate|levitate_walk`), `displayName` 1..24 chars, `equippedAuraId` `<= 128` chars, and server `updatedAt == request.time`.
+8. Every `/accounts/{userId}` document is strictly private to the owner (`request.auth.uid == userId && isVerified()`), contains zero PII (no email/phone), validates `uid == userId`, `username` (`1..24` chars), bounded `storage` array (`<= 200` validated entries), `totalRolls >= 0`, `equippedAuraId <= 128` chars, immutable `uid`/`createdAt`, and server timestamps.
 
 ## 2. The "Dirty Dozen" Attack Payloads (Must Return `PERMISSION_DENIED`)
 1. Unauthenticated write to `/rollPool/hack_1` (`request.auth == null`).
@@ -19,6 +20,6 @@
 7. Oversized `name` (`> 64` chars) or `description` (`> 240` chars).
 8. Invalid `classification` enum (`"Godlike"` instead of `Common|Uncommon|Rare|Epic|Legendary|Mythic`).
 9. Client-spoofed `createdAt` or `updatedAt` not equal to `request.time`.
-10. Author/Owner UID spoofing on create (`authorUid != request.auth.uid` or `ownerUid != request.auth.uid` in `/players`).
-11. Immutable field mutation on update (`createdAt`, `authorUid`, `ownerUid`, `sessionId`, or `id` changed, or mutating another player's `/players/{sessionId}`).
-12. Privilege escalation or invalid multiplayer payload: non-admin writing to `/admins/{uid}` OR unverified/spoofed `/players/{sessionId}` with out-of-bounds `x = 9999` or invalid `pose = "flyhack"`.
+10. Cross-user read/write on `/accounts/{otherUid}` or `uid != request.auth.uid` spoofing.
+11. Immutable field mutation on update (`createdAt`, `authorUid`, `ownerUid`, `sessionId`, `uid`, or `id` changed, or mutating another player's `/players/{sessionId}`).
+12. Invalid multiplayer pose/bounds or non-admin escalation on `/admins/{uid}`.

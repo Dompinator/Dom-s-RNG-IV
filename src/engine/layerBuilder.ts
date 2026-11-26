@@ -24,11 +24,19 @@ const _colorA = new THREE.Color();
 const _colorB = new THREE.Color();
 const _colorMix = new THREE.Color();
 
+import type { MusicSyncMetrics } from './spatialAudio';
+
 export interface CompiledLayerRuntime {
   layerId: string;
   signature: string;
   group: THREE.Group;
-  update: (dt: number, elapsed: number, layer: AuraLayer, pixelRatio: number) => void;
+  update: (
+    dt: number,
+    elapsed: number,
+    layer: AuraLayer,
+    pixelRatio: number,
+    music?: MusicSyncMetrics,
+  ) => void;
   dispose: () => void;
 }
 
@@ -57,8 +65,41 @@ function getBlending(layer: AuraLayer): THREE.Blending {
   return layer.blendMode === 'normal' ? THREE.NormalBlending : THREE.AdditiveBlending;
 }
 
-function computeAnimModulation(elapsed: number, layer: AuraLayer): number {
-  const { mode, speed, amplitude, frequency } = layer.animation;
+function computeAnimModulation(
+  elapsed: number,
+  layer: AuraLayer,
+  music?: MusicSyncMetrics,
+): number {
+  const { mode, speed, amplitude, frequency, syncToMusic } = layer.animation;
+
+  if (syncToMusic && music?.active) {
+    const freq = Math.max(0.2, frequency);
+    switch (mode) {
+      case 'burst':
+        return 1 + (music.beat * 1.65 + music.bass * 0.45) * amplitude;
+      case 'pulse':
+        return 1 + (music.bass * 1.25 + music.beat * 0.35) * amplitude;
+      case 'wave':
+        return (
+          1 +
+          (Math.sin(music.beatPhase * freq * 1.15) * (0.25 + music.level * 0.85) +
+            music.treble * 0.4) *
+            amplitude
+        );
+      case 'chaos':
+        return (
+          1 +
+          (music.beat * 1.25 +
+            music.treble * 0.85 +
+            Math.sin(elapsed * 20.0 * freq) * music.level * 0.5) *
+            amplitude
+        );
+      case 'smooth':
+      default:
+        return 1 + (music.level * 0.65 + music.bass * 0.35 - 0.12) * amplitude;
+    }
+  }
+
   const t = elapsed * Math.max(0.05, speed) * frequency;
   switch (mode) {
     case 'pulse':
@@ -79,6 +120,28 @@ function computeAnimModulation(elapsed: number, layer: AuraLayer): number {
     case 'smooth':
     default:
       return 1 + Math.sin(t * 0.6) * amplitude * 0.25;
+  }
+}
+
+function computeMusicSpeedScale(
+  layer: AuraLayer,
+  music?: MusicSyncMetrics,
+): number {
+  const { mode, amplitude, syncToMusic } = layer.animation;
+  if (!syncToMusic || !music?.active) return 1;
+  const react = Math.max(0.35, amplitude * 1.5);
+  switch (mode) {
+    case 'burst':
+      return 0.55 + music.beat * 2.4 * react + music.level * 0.5;
+    case 'pulse':
+      return 0.6 + music.bass * 1.35 * react + music.beat * 0.7;
+    case 'wave':
+      return 0.6 + music.level * 1.15 * react + music.treble * 0.6;
+    case 'chaos':
+      return 0.7 + music.treble * 1.5 * react + music.beat * 1.8 * react;
+    case 'smooth':
+    default:
+      return 0.5 + music.level * 1.2 * react;
   }
 }
 
@@ -167,8 +230,9 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
@@ -177,18 +241,23 @@ export function buildLayerRuntime(
         innerMesh.scale.setScalar(r * 0.92);
 
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const spd = l.animation.speed * dir;
+        const spd = l.animation.speed * dir * mSpeed;
         outerMesh.rotation.x += l.animation.rotationSpeed.x * spd * dt;
         outerMesh.rotation.y += l.animation.rotationSpeed.y * spd * dt;
         outerMesh.rotation.z += l.animation.rotationSpeed.z * spd * dt;
         innerMesh.rotation.y -= l.animation.rotationSpeed.y * spd * dt * 1.3;
 
-        outerMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+        const shaderTime =
+          l.animation.syncToMusic && music?.active
+            ? music.beatPhase * Math.max(0.25, l.animation.speed) * 1.6
+            : elapsed * Math.max(0.1, l.animation.speed);
+        outerMat.uniforms.uTime.value = shaderTime;
         outerMat.uniforms.uColorA.value.set(l.color);
         outerMat.uniforms.uColorB.value.set(l.secondaryColor);
         outerMat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
         outerMat.uniforms.uOpacity.value = l.settings.opacity;
-        outerMat.uniforms.uTurbulence.value = l.settings.turbulence;
+        outerMat.uniforms.uTurbulence.value =
+          l.settings.turbulence * (l.animation.syncToMusic && music?.active ? 0.8 + music.beat * 0.9 : 1);
 
         innerMat.color.set(l.secondaryColor);
         innerMat.opacity = l.settings.opacity * 0.22;
@@ -254,14 +323,15 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z + l.settings.tilt);
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const spd = l.animation.speed * dir;
+        const spd = l.animation.speed * dir * mSpeed;
         group.rotation.y += l.animation.rotationSpeed.y * spd * dt;
         group.rotation.x += l.animation.rotationSpeed.x * spd * dt * 0.35;
 
@@ -286,7 +356,10 @@ export function buildLayerRuntime(
           }
         });
 
-        bandMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+        bandMat.uniforms.uTime.value =
+          l.animation.syncToMusic && music?.active
+            ? music.beatPhase * Math.max(0.25, l.animation.speed) * 1.5
+            : elapsed * Math.max(0.1, l.animation.speed);
         bandMat.uniforms.uColorA.value.set(l.color);
         bandMat.uniforms.uColorB.value.set(l.secondaryColor);
         bandMat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
@@ -346,14 +419,16 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (_dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (_dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         group.rotation.set(l.rotation.x, l.rotation.y, l.rotation.z + l.settings.tilt);
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const t = elapsed * l.animation.speed * dir;
+        const baseClock =
+          l.animation.syncToMusic && music?.active ? music.beatPhase * 1.45 : elapsed;
+        const t = baseClock * l.animation.speed * dir;
 
         _colorA.set(l.color);
         _colorB.set(l.secondaryColor);
@@ -362,9 +437,13 @@ export function buildLayerRuntime(
         mat.opacity = l.settings.opacity;
 
         const isSphereOrbit = l.settings.emissionShape === 'sphere';
+        const radialBurst =
+          l.animation.syncToMusic && music?.active
+            ? 1 + (mod - 1) * 0.35
+            : 1;
         for (let i = 0; i < count; i++) {
           const angle = phases[i] + t * l.animation.rotationSpeed.y;
-          const r = l.settings.radius * radiiJitter[i];
+          const r = l.settings.radius * radiiJitter[i] * radialBurst;
 
           if (isSphereOrbit) {
             const phi = Math.acos(1 - (2 * (i + 0.5)) / count);
@@ -518,19 +597,20 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l, pixelRatio) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, pixelRatio, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         group.visible = l.visible;
         group.position.set(l.position.x, l.position.y, l.position.z);
         group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z + l.settings.tilt);
         if (!l.visible) return;
 
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const spd = l.animation.speed * dir;
+        const spd = l.animation.speed * dir * mSpeed;
         group.rotation.y += l.animation.rotationSpeed.y * spd * dt * 0.4;
 
         const turb = l.settings.turbulence;
-        const stepDt = dt * Math.max(0.05, l.animation.speed);
+        const stepDt = dt * Math.max(0.05, l.animation.speed) * mSpeed;
         const isVortex = l.settings.emissionShape === 'vortex';
 
         for (let i = 0; i < count; i++) {
@@ -543,9 +623,9 @@ export function buildLayerRuntime(
           let py = positions[i * 3 + 1];
           let pz = positions[i * 3 + 2];
 
-          let vx = velocities[i * 3];
-          let vy = velocities[i * 3 + 1];
-          let vz = velocities[i * 3 + 2];
+          const vx = velocities[i * 3];
+          const vy = velocities[i * 3 + 1];
+          const vz = velocities[i * 3 + 2];
 
           if (isVortex) {
             const angSpeed = 1.8 * dir * stepDt;
@@ -578,7 +658,8 @@ export function buildLayerRuntime(
 
         mat.uniforms.uColorA.value.set(l.color);
         mat.uniforms.uColorB.value.set(l.secondaryColor);
-        mat.uniforms.uSize.value = l.settings.size * 26.0;
+        mat.uniforms.uSize.value =
+          l.settings.size * 26.0 * (l.animation.syncToMusic && music?.active ? 0.85 + mod * 0.25 : 1);
         mat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
         mat.uniforms.uOpacity.value = l.settings.opacity;
         mat.uniforms.uPixelRatio.value = pixelRatio;
@@ -789,18 +870,21 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z);
         const dir = l.settings.reverseDirection ? -1 : 1;
-        group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * dir * dt * 0.5;
+        group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt * 0.5;
 
         const interval = Math.max(0.03, l.settings.lifetime / Math.max(0.25, l.animation.speed));
         timer += dt;
-        if (timer >= interval) {
+        const beatTrigger =
+          Boolean(l.animation.syncToMusic && music?.active && music.beat > 0.62 && timer >= 0.07);
+        if (timer >= interval || beatTrigger) {
           timer = 0;
           regenerateBolts(l, l.settings.intensity * l.settings.glow * mod);
         }
@@ -881,20 +965,24 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z + l.settings.tilt);
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const t = elapsed * l.animation.speed * dir;
-        group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * dir * dt * 0.4;
+        const baseClock =
+          l.animation.syncToMusic && music?.active ? music.beatPhase * 1.4 : elapsed;
+        const t = baseClock * l.animation.speed * dir;
+        group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt * 0.4;
 
         const radius = l.settings.radius;
         const spread = l.settings.spread;
         const halfW = Math.max(0.02, l.settings.thickness);
-        const turb = l.settings.turbulence;
+        const turb =
+          l.settings.turbulence * (l.animation.syncToMusic && music?.active ? 0.7 + music.beat * 0.9 : 1);
 
         const isSphereRibbon = l.settings.emissionShape === 'sphere';
         for (let rIdx = 0; rIdx < ribbonMeshes.length; rIdx++) {
@@ -955,7 +1043,7 @@ export function buildLayerRuntime(
           item.posAttr.needsUpdate = true;
         }
 
-        mat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+        mat.uniforms.uTime.value = baseClock * Math.max(0.1, l.animation.speed);
         mat.uniforms.uColorA.value.set(l.color);
         mat.uniforms.uColorB.value.set(l.secondaryColor);
         mat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
@@ -1033,14 +1121,15 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         group.rotation.set(l.rotation.x, l.rotation.y, l.rotation.z + l.settings.tilt);
         const dir = l.settings.reverseDirection ? -1 : 1;
-        const stepDt = dt * Math.max(0.05, l.animation.speed);
+        const stepDt = dt * Math.max(0.05, l.animation.speed) * mSpeed;
         const turb = l.settings.turbulence;
 
         _colorA.set(l.color);
@@ -1117,32 +1206,35 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
+        const mSpeed = computeMusicSpeedScale(l, music);
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
         const r = l.settings.radius * (0.95 + mod * 0.08);
         sphereMesh.scale.setScalar(r);
 
-        const waveCycle = (elapsed * Math.max(0.2, l.animation.speed) * 0.7) % 1;
+        const baseClock =
+          l.animation.syncToMusic && music?.active ? music.beatPhase * 1.45 : elapsed;
+        const waveCycle = (baseClock * Math.max(0.2, l.animation.speed) * 0.7) % 1;
         shockMesh.scale.setScalar(r * (0.4 + waveCycle * 1.35));
 
         const dir = l.settings.reverseDirection ? -1 : 1;
-        sphereMesh.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * dir * dt;
-        sphereMesh.rotation.x += l.animation.rotationSpeed.x * l.animation.speed * dir * dt;
+        sphereMesh.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt;
+        sphereMesh.rotation.x += l.animation.rotationSpeed.x * l.animation.speed * mSpeed * dir * dt;
 
-        sphereMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+        sphereMat.uniforms.uTime.value = baseClock * Math.max(0.1, l.animation.speed);
         sphereMat.uniforms.uColorA.value.set(l.color);
         sphereMat.uniforms.uColorB.value.set(l.secondaryColor);
         sphereMat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
         sphereMat.uniforms.uOpacity.value = l.settings.opacity;
         sphereMat.uniforms.uTurbulence.value = l.settings.turbulence;
 
-        shockMat.uniforms.uTime.value = elapsed * l.animation.speed;
+        shockMat.uniforms.uTime.value = baseClock * l.animation.speed;
         shockMat.uniforms.uColorA.value.set(l.secondaryColor);
         shockMat.uniforms.uColorB.value.set(l.color);
-        shockMat.uniforms.uIntensity.value = l.settings.intensity * (1 - waveCycle);
+        shockMat.uniforms.uIntensity.value = l.settings.intensity * (1 - waveCycle) * mod;
         shockMat.uniforms.uOpacity.value = l.settings.opacity * (1 - waveCycle) * 0.75;
       },
       dispose: () => {
@@ -1188,8 +1280,8 @@ export function buildLayerRuntime(
       layerId: layer.id,
       signature: sig,
       group,
-      update: (_dt, elapsed, l) => {
-        const mod = computeAnimModulation(elapsed, l);
+      update: (_dt, elapsed, l, _pr, music) => {
+        const mod = computeAnimModulation(elapsed, l, music);
         group.visible = l.visible;
 
         const shellScale = Math.max(1.01, Math.min(1.35, 1.02 + (l.settings.size - 1.0) * 0.15));
@@ -1199,7 +1291,10 @@ export function buildLayerRuntime(
         }
 
         if (!l.visible) return;
-        glowMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+        glowMat.uniforms.uTime.value =
+          l.animation.syncToMusic && music?.active
+            ? music.beatPhase * Math.max(0.25, l.animation.speed) * 1.5
+            : elapsed * Math.max(0.1, l.animation.speed);
         glowMat.uniforms.uColorA.value.set(l.color);
         glowMat.uniforms.uColorB.value.set(l.secondaryColor);
         glowMat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
@@ -1238,14 +1333,15 @@ export function buildLayerRuntime(
     layerId: layer.id,
     signature: sig,
     group,
-    update: (dt, elapsed, l) => {
-      const mod = computeAnimModulation(elapsed, l);
+    update: (dt, elapsed, l, _pr, music) => {
+      const mod = computeAnimModulation(elapsed, l, music);
+      const mSpeed = computeMusicSpeedScale(l, music);
       syncBaseTransform(l, mod);
       if (!l.visible) return;
 
       group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z);
       const dir = l.settings.reverseDirection ? -1 : 1;
-      group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * dir * dt;
+      group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt;
 
       const r = l.settings.radius;
       const height = Math.max(0.5, l.settings.spread);
@@ -1276,7 +1372,10 @@ export function buildLayerRuntime(
         }
       });
 
-      beamMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
+      beamMat.uniforms.uTime.value =
+        l.animation.syncToMusic && music?.active
+          ? music.beatPhase * Math.max(0.25, l.animation.speed) * 1.5
+          : elapsed * Math.max(0.1, l.animation.speed);
       beamMat.uniforms.uColorA.value.set(l.color);
       beamMat.uniforms.uColorB.value.set(l.secondaryColor);
       beamMat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;

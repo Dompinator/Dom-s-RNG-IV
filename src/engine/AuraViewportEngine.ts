@@ -471,14 +471,15 @@ export class AuraViewportEngine {
     this.rig.update(this.elapsed, this.poseMode);
 
     if (this.currentProject) {
+      this.spatialAudio.updateDistanceAttenuation(this.camera.position);
+      const music = this.spatialAudio.sampleMusicSync(simDt);
       const pixelRatio = this.renderer.getPixelRatio();
       for (const layer of this.currentProject.layers) {
         const runtime = this.runtimes.get(layer.id);
         if (runtime) {
-          runtime.update(simDt, this.elapsed, layer, pixelRatio);
+          runtime.update(simDt, this.elapsed, layer, pixelRatio, music);
         }
       }
-      this.spatialAudio.updateDistanceAttenuation(this.camera.position);
     }
 
     if (this.isSoftwareGl || !this.composer) {

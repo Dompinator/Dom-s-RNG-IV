@@ -988,13 +988,15 @@ export class BaseplateWorldEngine {
       this.playerPos.z,
     );
 
-    // 6. Update Equipped Aura Layers
+    // 6. Update Equipped Aura Layers (with live music-synced rhythm if song attached)
+    this.spatialAudio.updateDistanceAttenuation(this.playerPos, true);
+    const localMusic = this.spatialAudio.sampleMusicSync(dt);
     const pixelRatio = this.renderer.getPixelRatio();
     if (this.equippedAura) {
       for (const layer of this.equippedAura.layers) {
         const runtime = this.runtimes.get(layer.id);
         if (runtime) {
-          runtime.update(dt, this.elapsed, layer, pixelRatio);
+          runtime.update(dt, this.elapsed, layer, pixelRatio, localMusic);
         }
       }
     }
@@ -1013,9 +1015,6 @@ export class BaseplateWorldEngine {
     this.camera.lookAt(_lookTarget);
     this.camera.updateMatrixWorld();
     this.camera.getWorldPosition(_listenerWorldPos);
-
-    // Keep local player's own equipped aura clearly audible regardless of camera zoom
-    this.spatialAudio.updateDistanceAttenuation(this.playerPos, true);
 
     // 8. Smoothly interpolate Remote Multiplayer Players, Auras, Nameplates, and Spatial Audio
     const posAlpha = 1 - Math.exp(-12 * dt);
@@ -1050,16 +1049,17 @@ export class BaseplateWorldEngine {
         remote.currentPos.z,
       );
 
+      remote.spatialAudio.updateDistanceAttenuation(this.playerPos, false);
+      const remoteMusic = remote.spatialAudio.sampleMusicSync(dt);
+
       if (remote.equippedAura) {
         for (const layer of remote.equippedAura.layers) {
           const rRuntime = remote.runtimes.get(layer.id);
           if (rRuntime) {
-            rRuntime.update(dt, this.elapsed, layer, pixelRatio);
+            rRuntime.update(dt, this.elapsed, layer, pixelRatio, remoteMusic);
           }
         }
       }
-
-      remote.spatialAudio.updateDistanceAttenuation(this.playerPos, false);
     }
 
     if (this.isSoftwareGl || !this.composer) {

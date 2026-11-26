@@ -15,6 +15,146 @@ export interface SpatialAudioOptions {
   onStateChange?: (state: SpatialAudioState) => void;
 }
 
+export interface MusicSyncMetrics {
+  active: boolean;
+  level: number;
+  bass: number;
+  treble: number;
+  beat: number;
+  beatPhase: number;
+}
+
+const INACTIVE_MUSIC_METRICS: MusicSyncMetrics = {
+  active: false,
+  level: 0,
+  bass: 0,
+  treble: 0,
+  beat: 0,
+  beatPhase: 0,
+};
+
+interface AudioBeatTrack {
+  fps: number;
+  frameCount: number;
+  duration: number;
+  level: Float32Array;
+  bass: Float32Array;
+  treble: Float32Array;
+  beat: Float32Array;
+}
+
+const beatTrackCache = new WeakMap<AudioBuffer, AudioBeatTrack>();
+
+function getOrAnalyzeBeatTrack(buffer: AudioBuffer): AudioBeatTrack {
+  const cached = beatTrackCache.get(buffer);
+  if (cached) return cached;
+
+  const fps = 60;
+  const duration = Math.max(0.05, buffer.duration);
+  const frameCount = Math.max(1, Math.ceil(duration * fps));
+  const rawLevel = new Float32Array(frameCount);
+  const rawBass = new Float32Array(frameCount);
+  const rawTreble = new Float32Array(frameCount);
+
+  const channelData = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+  const samplesPerFrame = Math.max(1, Math.floor(sampleRate / fps));
+  const alphaLp = 1 - Math.exp((-2 * Math.PI * 190) / sampleRate);
+
+  let lp = 0;
+  let peakLevel = 0.001;
+  let peakBass = 0.001;
+  let peakTreble = 0.001;
+
+  for (let f = 0; f < frameCount; f++) {
+    const start = Math.floor((f / fps) * sampleRate);
+    const end = Math.min(channelData.length, start + samplesPerFrame);
+    const count = Math.max(1, end - start);
+
+    let sumSq = 0;
+    let bassSq = 0;
+    let trebleSq = 0;
+
+    // Stride up to 4 samples on very high sample rates to keep analysis <2ms
+    const stride = count > 600 ? 2 : 1;
+    let sampled = 0;
+    for (let i = start; i < end; i += stride) {
+      const s = channelData[i];
+      lp += alphaLp * (s - lp);
+      const hi = s - lp;
+      sumSq += s * s;
+      bassSq += lp * lp;
+      trebleSq += hi * hi;
+      sampled++;
+    }
+
+    const denom = Math.max(1, sampled);
+    const lvl = Math.sqrt(sumSq / denom);
+    const bss = Math.sqrt(bassSq / denom);
+    const trb = Math.sqrt(trebleSq / denom);
+
+    rawLevel[f] = lvl;
+    rawBass[f] = bss;
+    rawTreble[f] = trb;
+
+    if (lvl > peakLevel) peakLevel = lvl;
+    if (bss > peakBass) peakBass = bss;
+    if (trb > peakTreble) peakTreble = trb;
+  }
+
+  // Soft 85%-peak normalization so loud peaks don't crush normal verses
+  const normL = peakLevel * 0.85;
+  const normB = peakBass * 0.85;
+  const normT = peakTreble * 0.85;
+
+  const level = new Float32Array(frameCount);
+  const bass = new Float32Array(frameCount);
+  const treble = new Float32Array(frameCount);
+  const beat = new Float32Array(frameCount);
+
+  for (let f = 0; f < frameCount; f++) {
+    level[f] = Math.min(1, rawLevel[f] / normL);
+    bass[f] = Math.min(1, rawBass[f] / normB);
+    treble[f] = Math.min(1, rawTreble[f] / normT);
+  }
+
+  // Onset flux beat detector with fast attack and musical exponential decay
+  let beatEnv = 0;
+  let lastBeatFrame = -10;
+  for (let f = 0; f < frameCount; f++) {
+    const winStart = Math.max(0, f - 10);
+    let avgEnergy = 0;
+    let winLen = 0;
+    for (let k = winStart; k < f; k++) {
+      avgEnergy += bass[k] * 0.72 + level[k] * 0.28;
+      winLen++;
+    }
+    const localAvg = winLen > 0 ? avgEnergy / winLen : 0;
+    const currEnergy = bass[f] * 0.72 + level[f] * 0.28;
+    const flux = currEnergy - localAvg * 1.18;
+
+    if (flux > 0.055 && currEnergy > 0.14 && f - lastBeatFrame >= 5) {
+      beatEnv = Math.max(beatEnv, Math.min(1, flux * 3.8 + currEnergy * 0.28));
+      lastBeatFrame = f;
+    } else {
+      beatEnv *= 0.83;
+    }
+    beat[f] = beatEnv;
+  }
+
+  const track: AudioBeatTrack = {
+    fps,
+    frameCount,
+    duration,
+    level,
+    bass,
+    treble,
+    beat,
+  };
+  beatTrackCache.set(buffer, track);
+  return track;
+}
+
 const _anchorWorldPos = new THREE.Vector3();
 
 function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
@@ -55,6 +195,13 @@ export class SpatialAuraAudioController {
   private audioState: SpatialAudioState = 'none';
   private unlockListenersBound = false;
   private disposed = false;
+  private playStartCtxTime: number | null = null;
+  private beatTrack: AudioBeatTrack | null = null;
+  private beatPhase = 0;
+  private smoothLevel = 0;
+  private smoothBass = 0;
+  private smoothTreble = 0;
+  private smoothBeat = 0;
 
   constructor(camera: THREE.Camera, options?: SpatialAudioOptions) {
     this.camera = camera;
@@ -145,6 +292,7 @@ export class SpatialAuraAudioController {
     if (!sound.isPlaying && !this.muted && this.distanceFactor > 0.001) {
       try {
         sound.play();
+        this.playStartCtxTime = sound.context.currentTime;
       } catch {
         // Ignore transient WebAudio error
       }
@@ -223,6 +371,7 @@ export class SpatialAuraAudioController {
 
     const cached = this.sharedBufferCache.get(config.dataUrl);
     if (cached) {
+      this.beatTrack = getOrAnalyzeBeatTrack(cached);
       sound.setBuffer(cached);
       this.startPlaybackIfReady(sound);
       return;
@@ -244,6 +393,7 @@ export class SpatialAuraAudioController {
           return;
         }
         this.sharedBufferCache.set(config.dataUrl, audioBuffer);
+        this.beatTrack = getOrAnalyzeBeatTrack(audioBuffer);
         sound.setBuffer(audioBuffer);
         this.startPlaybackIfReady(sound);
       })
@@ -252,6 +402,64 @@ export class SpatialAuraAudioController {
           this.emitState('error');
         }
       });
+  }
+
+  public sampleMusicSync(dt: number): MusicSyncMetrics {
+    if (
+      this.disposed ||
+      !this.positionalAudio ||
+      !this.currentConfig ||
+      !this.beatTrack ||
+      !this.positionalAudio.isPlaying ||
+      this.playStartCtxTime === null
+    ) {
+      return INACTIVE_MUSIC_METRICS;
+    }
+
+    const rawElapsed = Math.max(
+      0,
+      this.positionalAudio.context.currentTime - this.playStartCtxTime,
+    );
+    const track = this.beatTrack;
+    const posSec = this.currentConfig.loop
+      ? rawElapsed % track.duration
+      : Math.min(rawElapsed, track.duration);
+
+    if (!this.currentConfig.loop && rawElapsed >= track.duration) {
+      return INACTIVE_MUSIC_METRICS;
+    }
+
+    const exactIdx = posSec * track.fps;
+    const i0 = Math.min(track.frameCount - 1, Math.floor(exactIdx));
+    const i1 = Math.min(track.frameCount - 1, i0 + 1);
+    const frac = exactIdx - i0;
+
+    const targetLevel =
+      track.level[i0] + (track.level[i1] - track.level[i0]) * frac;
+    const targetBass =
+      track.bass[i0] + (track.bass[i1] - track.bass[i0]) * frac;
+    const targetTreble =
+      track.treble[i0] + (track.treble[i1] - track.treble[i0]) * frac;
+    const targetBeat =
+      track.beat[i0] + (track.beat[i1] - track.beat[i0]) * frac;
+
+    const smoothAlpha = Math.min(1, dt * 24);
+    this.smoothLevel += (targetLevel - this.smoothLevel) * smoothAlpha;
+    this.smoothBass += (targetBass - this.smoothBass) * smoothAlpha;
+    this.smoothTreble += (targetTreble - this.smoothTreble) * smoothAlpha;
+    this.smoothBeat += (targetBeat - this.smoothBeat) * Math.min(1, dt * 36);
+
+    this.beatPhase +=
+      dt * (0.45 + this.smoothLevel * 1.35 + this.smoothBeat * 2.1);
+
+    return {
+      active: true,
+      level: this.smoothLevel,
+      bass: this.smoothBass,
+      treble: this.smoothTreble,
+      beat: this.smoothBeat,
+      beatPhase: this.beatPhase,
+    };
   }
 
   /**
@@ -305,6 +513,7 @@ export class SpatialAuraAudioController {
       if (this.positionalAudio.context.state === 'running') {
         try {
           this.positionalAudio.play();
+          this.playStartCtxTime = this.positionalAudio.context.currentTime;
           this.emitState('playing');
         } catch {
           // Ignore
@@ -354,6 +563,12 @@ export class SpatialAuraAudioController {
   public stopAndDetach() {
     this.loadSeq++;
     this.unbindUnlockListeners();
+    this.playStartCtxTime = null;
+    this.beatTrack = null;
+    this.smoothLevel = 0;
+    this.smoothBass = 0;
+    this.smoothTreble = 0;
+    this.smoothBeat = 0;
     if (this.positionalAudio) {
       try {
         if (this.positionalAudio.isPlaying) {

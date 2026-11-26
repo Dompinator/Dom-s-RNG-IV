@@ -3,22 +3,30 @@ import {
   Download,
   FolderOpen,
   Gamepad2,
+  LogIn,
   Package,
   Redo2,
   Save,
   Send,
+  ShieldCheck,
   Sparkles,
   Undo2,
   Upload,
+  User as UserIcon,
 } from 'lucide-react';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
+import type { User } from '../firebase';
 
 export type AppMode = 'play' | 'studio';
 
 interface TopToolbarProps {
   mode: AppMode;
   onChangeMode: (mode: AppMode) => void;
+  isAdmin: boolean;
+  authUser: User | null;
+  accountUsername: string;
+  onOpenAuth: () => void;
   project: AuraProject;
   canUndo: boolean;
   canRedo: boolean;
@@ -40,6 +48,10 @@ interface TopToolbarProps {
 export function TopToolbar({
   mode,
   onChangeMode,
+  isAdmin,
+  authUser,
+  accountUsername,
+  onOpenAuth,
   project,
   canUndo,
   canRedo,
@@ -58,6 +70,39 @@ export function TopToolbar({
   rollPoolCount,
 }: TopToolbarProps) {
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
+  const isStudio = isAdmin && mode === 'studio';
+
+  const accountPill = (
+    <button
+      type="button"
+      onClick={onOpenAuth}
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+        authUser && !authUser.emailVerified
+          ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-200'
+          : authUser
+            ? 'bg-white/[0.06] hover:bg-white/[0.12] border-white/[0.1] text-slate-100'
+            : 'bg-sky-500/15 hover:bg-sky-500/25 border-sky-500/35 text-sky-200'
+      }`}
+    >
+      {authUser ? (
+        <>
+          {isAdmin ? (
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          ) : (
+            <UserIcon className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          )}
+          <span className="max-w-[110px] truncate">
+            {authUser.emailVerified ? accountUsername : 'Verify Email'}
+          </span>
+        </>
+      ) : (
+        <>
+          <LogIn className="w-3.5 h-3.5" />
+          <span>Log In / Sign Up</span>
+        </>
+      )}
+    </button>
+  );
 
   return (
     <header className="h-13 shrink-0 bg-[#0d1017] border-b border-white/[0.08] px-4 flex items-center justify-between gap-4">
@@ -67,34 +112,36 @@ export function TopToolbar({
           Dom&apos;s RNG IV
         </span>
 
-        <div className="flex items-center gap-1 bg-black/40 p-1 rounded-lg border border-white/[0.06] shrink-0">
-          <button
-            type="button"
-            onClick={() => onChangeMode('play')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-              mode === 'play'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white'
-            }`}
-          >
-            <Gamepad2 className="w-3.5 h-3.5" />
-            <span>Baseplate</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onChangeMode('studio')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-              mode === 'studio'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Aura Studio</span>
-          </button>
-        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-1 bg-black/40 p-1 rounded-lg border border-white/[0.06] shrink-0">
+            <button
+              type="button"
+              onClick={() => onChangeMode('play')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                !isStudio
+                  ? 'bg-amber-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Gamepad2 className="w-3.5 h-3.5" />
+              <span>Baseplate</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeMode('studio')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                isStudio
+                  ? 'bg-amber-500 text-slate-950 font-semibold'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Aura Studio</span>
+            </button>
+          </div>
+        )}
 
-        {mode === 'studio' && (
+        {isStudio && (
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
@@ -122,7 +169,7 @@ export function TopToolbar({
       </div>
 
       {/* Center: Studio Project Info */}
-      {mode === 'studio' ? (
+      {isStudio ? (
         <div className="hidden xl:flex items-center gap-3 min-w-0">
           <span className="text-sm font-medium text-slate-100 truncate max-w-[200px]">
             {project.name}
@@ -145,12 +192,12 @@ export function TopToolbar({
         <div className="hidden lg:flex items-center gap-3 text-xs text-slate-400">
           <span>Baseplate World</span>
           <span aria-hidden="true">·</span>
-          <span>Roll, store, equip &amp; import custom exported auras</span>
+          <span>Roll, store, equip &amp; explore custom auras with friends</span>
         </div>
       )}
 
       {/* Right Actions */}
-      {mode === 'studio' ? (
+      {isStudio ? (
         <div className="flex items-center gap-1.5 shrink-0">
           <div className="hidden md:flex items-center gap-0.5 mr-1 pr-2 border-r border-white/[0.08]">
             <button
@@ -222,6 +269,8 @@ export function TopToolbar({
             <Send className="w-3.5 h-3.5" />
             <span>Send to Roll Pool</span>
           </button>
+
+          {accountPill}
         </div>
       ) : (
         <div className="flex items-center gap-2 shrink-0">
@@ -237,10 +286,12 @@ export function TopToolbar({
             onClick={onOpenRegistry}
             className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors whitespace-nowrap cursor-pointer"
           >
-            Roll Pool Manager
+            {isAdmin ? 'Roll Pool Manager' : 'Roll Pool'}
           </button>
+          {accountPill}
         </div>
       )}
     </header>
   );
 }
+

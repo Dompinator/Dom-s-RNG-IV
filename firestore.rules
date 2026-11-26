@@ -26,6 +26,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
     function isAdmin() {
       return isVerified() && (
         request.auth.token.email.lower() == 'codompic@gmail.com' ||
@@ -89,6 +93,32 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'username', 'equippedAuraId', 'totalRolls', 'storage', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'username', 'equippedAuraId', 'totalRolls', 'storage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.username is string && data.username.size() >= 1 && data.username.size() <= 24
+        && data.equippedAuraId is string && data.equippedAuraId.size() <= 128
+        && data.totalRolls is number && data.totalRolls >= 0 && data.totalRolls <= 1000000000
+        && data.storage is list && data.storage.size() <= 200
+        && (data.storage.size() == 0 || (
+          data.storage[0] is map
+          && data.storage[0].keys().hasAll(['auraId', 'count', 'firstObtainedAt', 'lastObtainedAt'])
+          && data.storage[0].keys().hasOnly(['auraId', 'count', 'firstObtainedAt', 'lastObtainedAt'])
+          && isValidId(data.storage[0].auraId)
+          && data.storage[0].count is number && data.storage[0].count >= 1 && data.storage[0].count <= 100000000
+          && data.storage[0].firstObtainedAt is string && data.storage[0].firstObtainedAt.size() <= 64
+          && data.storage[0].lastObtainedAt is string && data.storage[0].lastObtainedAt.size() <= 64
+        ))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     match /rollPool/{auraId} {
       // Public non-PII game catalog readable on any device (including GitHub Pages)
       allow get: if isValidId(auraId);
@@ -144,6 +174,31 @@ service cloud.firestore {
       allow delete: if isValidId(sessionId)
         && isVerified()
         && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /accounts/{userId} {
+      // Strictly private per-account cloud save (owner-only read/write, no public list)
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'username', 'equippedAuraId', 'totalRolls', 'storage', 'updatedAt'
+        ]);
+
+      allow delete: if isValidId(userId) && isOwner(userId);
     }
 
     match /admins/{userId} {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AddLayerModal } from './components/AddLayerModal';
 import { AuraRegistryModal } from './components/AuraRegistryModal';
+import { AuthModal } from './components/AuthModal';
 import { BaseplatePlayView } from './components/BaseplatePlayView';
 import { InspectorPanel } from './components/InspectorPanel';
 import { LayerPanel } from './components/LayerPanel';
@@ -27,6 +28,7 @@ import {
   setLastActiveProjectId,
 } from './aura/storage';
 import type {
+  AnimationMode,
   AuraAudioConfig,
   AuraEnvironment,
   AuraLayer,
@@ -47,12 +49,21 @@ import {
 } from './game/gameRegistry';
 import {
   auth,
+  createUserWithEmailAndPassword,
   googleProvider,
   onAuthStateChanged,
+  reload,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   type User,
 } from './firebase';
+import {
+  saveUserAccountState,
+  subscribeToUserAccount,
+} from './game/accountSync';
 import {
   checkUserIsAdmin,
   deleteRollPoolAura,
@@ -64,6 +75,35 @@ import {
   fetchGlobalRollPool,
   mergeGlobalIntoCatalog,
 } from './game/globalPoolSync';
+
+function formatFirebaseAuthError(err: unknown): string | null {
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: string }).code)
+      : '';
+  switch (code) {
+    case 'auth/popup-closed-by-user':
+      return null;
+    case 'auth/operation-not-allowed':
+      return 'Email/Password Sign-In is not enabled yet in Firebase Console. Enable it under Authentication > Sign-in method.';
+    case 'auth/unauthorized-domain':
+      return `Add "${window.location.hostname}" to Firebase Console > Authentication > Settings > Authorized domains to sign in from this URL.`;
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Switch to Log In instead.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect email or password.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment and try again.';
+    default:
+      return err instanceof Error ? err.message : 'Authentication failed.';
+  }
+}
 
 interface ToastMessage {
   id: number;
@@ -124,6 +164,10 @@ export default function App() {
 
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [accountUsername, setAccountUsername] = useState('Player');
+  const [accountLoaded, setAccountLoaded] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
 
@@ -134,6 +178,18 @@ export default function App() {
   const catalogRef = useRef<CatalogAuraEntry[]>(catalog);
   catalogRef.current = catalog;
 
+  const storageRef = useRef<StoredAuraEntry[]>(storage);
+  storageRef.current = storage;
+  const equippedAuraIdRef = useRef<string | null>(equippedAuraId);
+  equippedAuraIdRef.current = equippedAuraId;
+  const totalRollsRef = useRef<number>(totalRolls);
+  totalRollsRef.current = totalRolls;
+  const accountUsernameRef = useRef<string>(accountUsername);
+  accountUsernameRef.current = accountUsername;
+  const migratedUidsRef = useRef<Set<string>>(new Set());
+
+  const effectiveMode: AppMode = isAdmin ? mode : 'play';
+
   const showToast = useCallback((text: string, kind: 'info' | 'error' = 'info') => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToast({ id: Date.now(), kind, text });
@@ -142,19 +198,91 @@ export default function App() {
     }, 5200);
   }, []);
 
-  // Track Google Auth & admin status
+  // Lock Aura Studio strictly to Dompinator admin account
+  useEffect(() => {
+    if (!isAdmin) {
+      setMode('play');
+      setAddModalOpen(false);
+      setLibraryOpen(false);
+    }
+  }, [isAdmin]);
+
+  // Track Auth & admin status
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setAuthUser(user);
+      setAuthError(null);
       if (user) {
+        const defaultName =
+          user.displayName?.trim().split(/\s+/)[0]?.slice(0, 24) ||
+          user.email?.split('@')[0]?.trim().slice(0, 24) ||
+          'Player';
+        setAccountUsername(defaultName);
         const admin = await checkUserIsAdmin(user.uid, user.email, user.emailVerified);
         setIsAdmin(admin);
       } else {
         setIsAdmin(false);
+        setAccountLoaded(false);
+        setAccountUsername('Player');
       }
     });
     return () => unsub();
   }, []);
+
+  // Subscribe to verified user's cloud account save (/accounts/{uid})
+  useEffect(() => {
+    if (!authUser || !authUser.emailVerified) {
+      setAccountLoaded(false);
+      return;
+    }
+
+    const uid = authUser.uid;
+    const unsub = subscribeToUserAccount(
+      uid,
+      ({ exists, account }) => {
+        if (!exists) {
+          if (!migratedUidsRef.current.has(uid)) {
+            migratedUidsRef.current.add(uid);
+            const fallbackName =
+              authUser.displayName?.trim().split(/\s+/)[0]?.slice(0, 24) ||
+              authUser.email?.split('@')[0]?.trim().slice(0, 24) ||
+              'Player';
+            void saveUserAccountState(uid, {
+              username: fallbackName,
+              equippedAuraId: equippedAuraIdRef.current,
+              totalRolls: totalRollsRef.current,
+              storage: storageRef.current,
+            }).catch((err) => {
+              const msg = err instanceof Error ? err.message : 'Account save init failed.';
+              setCloudError(msg);
+            });
+            saveStorage([]);
+            saveEquippedAuraId(null);
+            saveTotalRolls(0);
+            setAccountUsername(fallbackName);
+            setAccountLoaded(true);
+          }
+          return;
+        }
+
+        if (account) {
+          saveStorage([]);
+          saveEquippedAuraId(null);
+          saveTotalRolls(0);
+          setStorage(account.storage);
+          setEquippedAuraId(account.equippedAuraId);
+          setTotalRolls(account.totalRolls);
+          setAccountUsername(account.username);
+          setAccountLoaded(true);
+        }
+      },
+      (err) => {
+        setCloudError(err.message);
+      },
+    );
+
+    return () => unsub();
+  }, [authUser]);
 
   // Real-time Firestore Roll Pool subscription (automatically updates for ALL users on ALL devices)
   useEffect(() => {
@@ -190,7 +318,7 @@ export default function App() {
 
   const handleSyncLocalToCloud = useCallback(async () => {
     if (!isAdmin || !authUser) {
-      showToast('Sign in with the creator Google account to sync to cloud.', 'error');
+      showToast('Sign in with the Dompinator account to sync to cloud.', 'error');
       return;
     }
     const localDrafts = catalogRef.current.filter((c) => c.source !== 'global');
@@ -226,30 +354,149 @@ export default function App() {
     void handleSyncLocalToCloud();
   }, [isAdmin, authUser, handleSyncLocalToCloud]);
 
-  const handleSignIn = useCallback(async () => {
+  const handleGoogleSignIn = useCallback(async () => {
+    setAuthError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-      showToast('Signed in with Google.');
+      setAuthModalOpen(false);
+      showToast('Signed in with Google. Account cloud save active.');
     } catch (err: unknown) {
-      const code =
-        err && typeof err === 'object' && 'code' in err
-          ? String((err as { code?: string }).code)
-          : '';
-      if (code === 'auth/popup-closed-by-user') return;
-      if (code === 'auth/unauthorized-domain') {
-        const msg = `Add "${window.location.hostname}" to Firebase Console > Authentication > Authorized domains to sign in from this URL.`;
-        setCloudError(msg);
-        showToast(msg, 'error');
-        return;
-      }
-      const errMsg = err instanceof Error ? err.message : 'Google sign-in failed.';
-      setCloudError(errMsg);
-      showToast(errMsg, 'error');
+      const msg = formatFirebaseAuthError(err);
+      if (!msg) return;
+      setAuthError(msg);
+      setCloudError(msg);
+      showToast(msg, 'error');
     }
   }, [showToast]);
 
+  const handleEmailLogin = useCallback(
+    async (emailInput: string, passwordInput: string) => {
+      setAuthError(null);
+      try {
+        const cred = await signInWithEmailAndPassword(
+          auth,
+          emailInput,
+          passwordInput,
+        );
+        if (cred.user.emailVerified) {
+          setAuthModalOpen(false);
+          showToast('Logged in! Loading your saved auras.');
+        } else {
+          showToast('Logged in — please verify your email to unlock Cloud Save.');
+        }
+      } catch (err: unknown) {
+        const msg = formatFirebaseAuthError(err) ?? 'Log in failed.';
+        setAuthError(msg);
+        throw new Error(msg);
+      }
+    },
+    [showToast],
+  );
+
+  const handleEmailSignUp = useCallback(
+    async (usernameInput: string, emailInput: string, passwordInput: string) => {
+      setAuthError(null);
+      try {
+        const cleanName = usernameInput.trim().slice(0, 24) || 'Player';
+        const cred = await createUserWithEmailAndPassword(
+          auth,
+          emailInput,
+          passwordInput,
+        );
+        await updateProfile(cred.user, { displayName: cleanName });
+        await sendEmailVerification(cred.user);
+        setAccountUsername(cleanName);
+        showToast(`Verification email sent to ${emailInput}.`);
+      } catch (err: unknown) {
+        const msg = formatFirebaseAuthError(err) ?? 'Sign up failed.';
+        setAuthError(msg);
+        throw new Error(msg);
+      }
+    },
+    [showToast],
+  );
+
+  const handleResendVerification = useCallback(async () => {
+    if (!auth.currentUser) return;
+    setAuthError(null);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      showToast(`Verification link resent to ${auth.currentUser.email}.`);
+    } catch (err: unknown) {
+      const msg = formatFirebaseAuthError(err) ?? 'Failed to resend email.';
+      setAuthError(msg);
+      showToast(msg, 'error');
+    }
+  }, [showToast]);
+
+  const handleRefreshVerification = useCallback(async () => {
+    if (!auth.currentUser) return;
+    setAuthError(null);
+    try {
+      await reload(auth.currentUser);
+      const refreshed = auth.currentUser;
+      setAuthUser(refreshed ? ({ ...refreshed } as User) : null);
+      if (refreshed?.emailVerified) {
+        const admin = await checkUserIsAdmin(
+          refreshed.uid,
+          refreshed.email,
+          refreshed.emailVerified,
+        );
+        setIsAdmin(admin);
+        setAuthModalOpen(false);
+        showToast('Email verified! Account cloud save & multiplayer unlocked.');
+      } else {
+        setAuthError(
+          'Email not verified yet — please click the link in your inbox, then try again.',
+        );
+      }
+    } catch (err: unknown) {
+      const msg = formatFirebaseAuthError(err) ?? 'Failed to refresh status.';
+      setAuthError(msg);
+    }
+  }, [showToast]);
+
+  const handleUpdateUsername = useCallback(
+    async (newName: string) => {
+      const clean = newName.trim().slice(0, 24) || 'Player';
+      setAccountUsername(clean);
+      if (authUser && authUser.emailVerified) {
+        try {
+          await updateProfile(authUser, { displayName: clean });
+        } catch {
+          // Display name update on auth profile is optional
+        }
+        try {
+          await saveUserAccountState(authUser.uid, {
+            username: clean,
+            equippedAuraId: equippedAuraIdRef.current,
+            totalRolls: totalRollsRef.current,
+            storage: storageRef.current,
+          });
+          showToast(`Updated username to "${clean}".`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to save username.';
+          setAuthError(msg);
+          showToast(msg, 'error');
+        }
+      }
+    },
+    [authUser, showToast],
+  );
+
   const handleSignOut = useCallback(async () => {
     await signOut(auth);
+    migratedUidsRef.current.clear();
+    setStorage([]);
+    setEquippedAuraId(null);
+    setTotalRolls(0);
+    setAccountUsername('Player');
+    setAccountLoaded(false);
+    setIsAdmin(false);
+    setMode('play');
+    saveStorage([]);
+    saveEquippedAuraId(null);
+    saveTotalRolls(0);
     showToast('Signed out.');
   }, [showToast]);
 
@@ -441,6 +688,32 @@ export default function App() {
     }));
   };
 
+  const handleSyncAllToMusic = (subMode: AnimationMode) => {
+    commitChange((prev) => ({
+      ...prev,
+      layers: prev.layers.map((l) => ({
+        ...l,
+        animation: { ...l.animation, syncToMusic: true, mode: subMode },
+      })),
+    }));
+    showToast(`Synced all layers to Music > ${subMode}.`);
+  };
+
+  const handleToggleAllMusicSync = (enabled: boolean) => {
+    commitChange((prev) => ({
+      ...prev,
+      layers: prev.layers.map((l) => ({
+        ...l,
+        animation: { ...l.animation, syncToMusic: enabled },
+      })),
+    }));
+    showToast(
+      enabled
+        ? 'All layers now follow the aura song.'
+        : 'Music sync turned off across layers.',
+    );
+  };
+
   // Studio File I/O
   const handleSaveProject = () => {
     const updatedList = saveProjectToLibrary(project);
@@ -517,8 +790,9 @@ export default function App() {
     showToast('Removed project from local library.');
   };
 
-  // Send Studio Aura directly into the Roll Pool (auto-syncs to Firestore when signed in as creator)
+  // Send Studio Aura directly into the Roll Pool (auto-syncs to Firestore when signed in as Dompinator)
   const handlePublishToRollPool = () => {
+    if (!isAdmin) return;
     const safeId = sanitizeAuraDocId(project.id);
     const prepared: AuraProject = {
       ...JSON.parse(JSON.stringify(project)),
@@ -567,42 +841,65 @@ export default function App() {
     }
   };
 
-  // Game Registry / Storage / Equip Handlers
-  const handleRecordRoll = useCallback((rolledProject: AuraProject) => {
-    const now = new Date().toISOString();
-    setStorage((prev) => {
-      const idx = prev.findIndex((s) => s.auraId === rolledProject.id);
-      let next: StoredAuraEntry[];
-      if (idx >= 0) {
-        next = prev.map((s, i) =>
-          i === idx ? { ...s, count: s.count + 1, lastObtainedAt: now } : s,
-        );
+  // Game Registry / Storage / Equip Handlers (persisted to Cloud Account when verified-signed-in, else localStorage)
+  const persistAccountProgression = useCallback(
+    (
+      nextStorage: StoredAuraEntry[],
+      nextEquipped: string | null,
+      nextRolls: number,
+    ) => {
+      if (authUser && authUser.emailVerified) {
+        void saveUserAccountState(authUser.uid, {
+          username: accountUsernameRef.current,
+          equippedAuraId: nextEquipped,
+          totalRolls: nextRolls,
+          storage: nextStorage,
+        }).catch((err) => {
+          const msg =
+            err instanceof Error ? err.message : 'Failed to save progression to account.';
+          setCloudError(msg);
+        });
       } else {
-        next = [
-          {
-            auraId: rolledProject.id,
-            count: 1,
-            firstObtainedAt: now,
-            lastObtainedAt: now,
-          },
-          ...prev,
-        ];
+        saveStorage(nextStorage);
+        saveEquippedAuraId(nextEquipped);
+        saveTotalRolls(nextRolls);
       }
-      saveStorage(next);
-      return next;
-    });
+    },
+    [authUser],
+  );
 
-    setTotalRolls((r) => {
-      const next = r + 1;
-      saveTotalRolls(next);
-      return next;
-    });
-  }, []);
+  const handleRecordRoll = useCallback(
+    (rolledProject: AuraProject) => {
+      const now = new Date().toISOString();
+      const prevStorage = storageRef.current;
+      const idx = prevStorage.findIndex((s) => s.auraId === rolledProject.id);
+      const nextStorage: StoredAuraEntry[] =
+        idx >= 0
+          ? prevStorage.map((s, i) =>
+              i === idx ? { ...s, count: s.count + 1, lastObtainedAt: now } : s,
+            )
+          : [
+              {
+                auraId: rolledProject.id,
+                count: 1,
+                firstObtainedAt: now,
+                lastObtainedAt: now,
+              },
+              ...prevStorage,
+            ];
+      const nextRolls = totalRollsRef.current + 1;
+
+      setStorage(nextStorage);
+      setTotalRolls(nextRolls);
+      persistAccountProgression(nextStorage, equippedAuraIdRef.current, nextRolls);
+    },
+    [persistAccountProgression],
+  );
 
   const handleEquipAura = useCallback(
     (auraId: string | null) => {
       setEquippedAuraId(auraId);
-      saveEquippedAuraId(auraId);
+      persistAccountProgression(storageRef.current, auraId, totalRollsRef.current);
       if (auraId) {
         const found = catalog.find((c) => c.project.id === auraId);
         if (found) showToast(`Equipped "${found.project.name}".`);
@@ -610,23 +907,22 @@ export default function App() {
         showToast('Unequipped aura.');
       }
     },
-    [catalog, showToast],
+    [catalog, persistAccountProgression, showToast],
   );
 
   const handleDiscardStored = useCallback(
     (auraId: string) => {
-      setStorage((prev) => {
-        const next = prev.filter((s) => s.auraId !== auraId);
-        saveStorage(next);
-        return next;
-      });
-      if (equippedAuraId === auraId) {
-        setEquippedAuraId(null);
-        saveEquippedAuraId(null);
+      const nextStorage = storageRef.current.filter((s) => s.auraId !== auraId);
+      const nextEquipped =
+        equippedAuraIdRef.current === auraId ? null : equippedAuraIdRef.current;
+      setStorage(nextStorage);
+      if (nextEquipped !== equippedAuraIdRef.current) {
+        setEquippedAuraId(nextEquipped);
       }
+      persistAccountProgression(nextStorage, nextEquipped, totalRollsRef.current);
       showToast('Removed aura from Storage.');
     },
-    [equippedAuraId, showToast],
+    [persistAccountProgression, showToast],
   );
 
   const handleImportCatalogEntries = useCallback(
@@ -794,20 +1090,36 @@ export default function App() {
     }
   }, [isAdmin, authUser, showToast]);
 
-  const handleOpenInStudio = useCallback((target: AuraProject) => {
-    setProject(JSON.parse(JSON.stringify(target)));
-    setSelectedLayerId(target.layers[0]?.id ?? null);
-    setPast([]);
-    setFuture([]);
-    setHasUnsavedChanges(false);
-    setMode('studio');
-  }, []);
+  const handleOpenInStudio = useCallback(
+    (target: AuraProject) => {
+      if (!isAdmin) return;
+      setProject(JSON.parse(JSON.stringify(target)));
+      setSelectedLayerId(target.layers[0]?.id ?? null);
+      setPast([]);
+      setFuture([]);
+      setHasUnsavedChanges(false);
+      setMode('studio');
+    },
+    [isAdmin],
+  );
+
+  const handleChangeMode = useCallback(
+    (nextMode: AppMode) => {
+      if (nextMode === 'studio' && !isAdmin) return;
+      setMode(nextMode);
+    },
+    [isAdmin],
+  );
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#090b10] text-slate-100 overflow-hidden">
       <TopToolbar
-        mode={mode}
-        onChangeMode={setMode}
+        mode={effectiveMode}
+        onChangeMode={handleChangeMode}
+        isAdmin={isAdmin}
+        authUser={authUser}
+        accountUsername={accountUsername}
+        onOpenAuth={() => setAuthModalOpen(true)}
         project={project}
         canUndo={past.length > 0}
         canRedo={future.length > 0}
@@ -835,14 +1147,16 @@ export default function App() {
       />
 
       <main className="flex-1 min-h-0 flex overflow-hidden relative">
-        {mode === 'play' ? (
+        {effectiveMode === 'play' ? (
           <BaseplatePlayView
             catalog={catalog}
             storage={storage}
             equippedAuraId={equippedAuraId}
             totalRolls={totalRolls}
+            isAdmin={isAdmin}
             authUser={authUser}
-            onSignIn={handleSignIn}
+            accountUsername={accountUsername}
+            onOpenAuth={() => setAuthModalOpen(true)}
             onSignOut={handleSignOut}
             onOpenStorage={() => setStorageOpen(true)}
             onOpenRegistry={() => setRegistryOpen(true)}
@@ -866,6 +1180,7 @@ export default function App() {
                 onUpdateEnvironment={handleUpdateEnvironment}
                 onUpdateAudio={handleUpdateAudio}
                 onSetLevitate={handleSetLevitate}
+                onToggleAllMusicSync={handleToggleAllMusicSync}
                 onNotify={showToast}
               />
             )}
@@ -880,30 +1195,36 @@ export default function App() {
             {!zenMode && (
               <InspectorPanel
                 layer={selectedLayer}
+                hasAudio={Boolean(project.audio)}
                 onUpdateLayer={handleUpdateLayer}
                 onUpdateSettings={handleUpdateSettings}
                 onUpdateAnimation={handleUpdateAnimation}
+                onSyncAllToMusic={handleSyncAllToMusic}
               />
             )}
           </>
         )}
       </main>
 
-      <AddLayerModal
-        open={addModalOpen}
-        onClose={() => setAddModalOpen(false)}
-        onSelectType={handleAddLayer}
-      />
+      {isAdmin && (
+        <>
+          <AddLayerModal
+            open={addModalOpen}
+            onClose={() => setAddModalOpen(false)}
+            onSelectType={handleAddLayer}
+          />
 
-      <ProjectLibraryModal
-        open={libraryOpen}
-        activeProjectId={project.id}
-        savedProjects={savedProjects}
-        onClose={() => setLibraryOpen(false)}
-        onCreateBlank={handleCreateBlank}
-        onLoadProject={handleLoadProject}
-        onDeleteSaved={handleDeleteSaved}
-      />
+          <ProjectLibraryModal
+            open={libraryOpen}
+            activeProjectId={project.id}
+            savedProjects={savedProjects}
+            onClose={() => setLibraryOpen(false)}
+            onCreateBlank={handleCreateBlank}
+            onLoadProject={handleLoadProject}
+            onDeleteSaved={handleDeleteSaved}
+          />
+        </>
+      )}
 
       <StorageModal
         open={storageOpen}
@@ -923,7 +1244,7 @@ export default function App() {
         cloudConnected={cloudConnected}
         cloudError={cloudError}
         onSyncLocalToCloud={handleSyncLocalToCloud}
-        onSignIn={handleSignIn}
+        onOpenAuth={() => setAuthModalOpen(true)}
         onSignOut={handleSignOut}
         onClose={() => setRegistryOpen(false)}
         onImportEntries={handleImportCatalogEntries}
@@ -933,6 +1254,25 @@ export default function App() {
         onOpenInStudio={handleOpenInStudio}
         onResetDefaults={handleResetCatalogDefaults}
         onNotify={showToast}
+      />
+
+      <AuthModal
+        open={authModalOpen}
+        authUser={authUser}
+        isAdmin={isAdmin}
+        accountUsername={accountUsername}
+        totalRolls={totalRolls}
+        uniqueOwnedCount={storage.length}
+        accountLoaded={accountLoaded}
+        authError={authError}
+        onClose={() => setAuthModalOpen(false)}
+        onGoogleSignIn={handleGoogleSignIn}
+        onEmailLogin={handleEmailLogin}
+        onEmailSignUp={handleEmailSignUp}
+        onResendVerification={handleResendVerification}
+        onRefreshVerification={handleRefreshVerification}
+        onUpdateUsername={handleUpdateUsername}
+        onSignOut={handleSignOut}
       />
 
       {toast && (

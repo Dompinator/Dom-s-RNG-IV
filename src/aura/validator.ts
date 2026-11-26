@@ -123,6 +123,9 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
       textureRef: sanitizeEnum(l.textureRef, TEXTURE_REFS, 'soft_orb'),
       animation: {
         mode: sanitizeEnum(animRaw.mode, ANIMATION_MODES, 'smooth'),
+        ...(typeof animRaw.syncToMusic === 'boolean'
+          ? { syncToMusic: animRaw.syncToMusic }
+          : {}),
         speed: clamp(animRaw.speed, 0, 10, 1),
         amplitude: clamp(animRaw.amplitude, 0, 5, 0.25),
         frequency: clamp(animRaw.frequency, 0.1, 30, 1.5),

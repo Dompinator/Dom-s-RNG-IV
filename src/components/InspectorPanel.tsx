@@ -1,3 +1,4 @@
+import { Music } from 'lucide-react';
 import {
   ANCHOR_LABELS,
   ANCHOR_POINTS,
@@ -8,6 +9,7 @@ import {
   ORBITER_SHAPES,
   TEXTURE_LABELS,
   TEXTURE_REFS,
+  type AnimationMode,
   type AuraLayer,
   type LayerAnimationSettings,
   type LayerEffectSettings,
@@ -15,9 +17,11 @@ import {
 
 interface InspectorPanelProps {
   layer: AuraLayer | null;
+  hasAudio?: boolean;
   onUpdateLayer: (id: string, patch: Partial<AuraLayer>) => void;
   onUpdateSettings: (id: string, patch: Partial<LayerEffectSettings>) => void;
   onUpdateAnimation: (id: string, patch: Partial<LayerAnimationSettings>) => void;
+  onSyncAllToMusic?: (mode: AnimationMode) => void;
 }
 
 const EFFECT_LABEL_MAP = Object.fromEntries(
@@ -66,9 +70,11 @@ function SliderRow({
 
 export function InspectorPanel({
   layer,
+  hasAudio = false,
   onUpdateLayer,
   onUpdateSettings,
   onUpdateAnimation,
+  onSyncAllToMusic,
 }: InspectorPanelProps) {
   if (!layer) {
     return (
@@ -536,24 +542,89 @@ export function InspectorPanel({
 
           <div>
             <label className="block text-[11px] text-slate-400 mb-1">
-              Modulation Mode
+              Movement Mode
             </label>
-            <div className="grid grid-cols-5 gap-1 bg-black/35 p-1 rounded-md">
-              {ANIMATION_MODES.map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => onUpdateAnimation(layer.id, { mode })}
-                  className={`py-1 text-[10px] font-medium rounded capitalize transition-colors cursor-pointer ${
-                    a.mode === mode
-                      ? 'bg-amber-500 text-slate-950 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {mode}
-                </button>
-              ))}
+            <div className="grid grid-cols-3 gap-1 bg-black/35 p-1 rounded-md">
+              {ANIMATION_MODES.map((mode) => {
+                const active = !a.syncToMusic && a.mode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() =>
+                      onUpdateAnimation(layer.id, { mode, syncToMusic: false })
+                    }
+                    className={`py-1 text-[10px] font-medium rounded capitalize transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-amber-500 text-slate-950 font-semibold'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => onUpdateAnimation(layer.id, { syncToMusic: true })}
+                className={`flex items-center justify-center gap-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer ${
+                  a.syncToMusic
+                    ? 'bg-sky-400 text-slate-950 font-semibold'
+                    : 'text-sky-300 hover:bg-sky-500/15'
+                }`}
+              >
+                <Music className="w-3 h-3" />
+                <span>Music</span>
+              </button>
             </div>
+
+            {a.syncToMusic && (
+              <div className="mt-2 p-2.5 rounded-md bg-sky-500/10 border border-sky-500/25 space-y-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-sky-300 capitalize">
+                    Music &gt; {a.mode}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Follows rhythm &amp; beat
+                  </span>
+                </div>
+                <div className="grid grid-cols-5 gap-1 bg-black/40 p-1 rounded">
+                  {ANIMATION_MODES.map((subMode) => (
+                    <button
+                      key={subMode}
+                      type="button"
+                      onClick={() =>
+                        onUpdateAnimation(layer.id, {
+                          mode: subMode,
+                          syncToMusic: true,
+                        })
+                      }
+                      className={`py-1 text-[10px] font-medium rounded capitalize transition-colors cursor-pointer ${
+                        a.mode === subMode
+                          ? 'bg-sky-400 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {subMode}
+                    </button>
+                  ))}
+                </div>
+                {onSyncAllToMusic && (
+                  <button
+                    type="button"
+                    onClick={() => onSyncAllToMusic(a.mode)}
+                    className="w-full py-1 px-2 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/30 text-[10px] font-semibold text-sky-200 transition-colors cursor-pointer capitalize"
+                  >
+                    Apply Music &gt; {a.mode} to All Layers
+                  </button>
+                )}
+                {!hasAudio && (
+                  <p className="text-[10px] text-amber-300 leading-snug">
+                    Upload a song in the Layers footer or Aura &amp; Rarity tab to drive Music Sync.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           <SliderRow
@@ -565,7 +636,7 @@ export function InspectorPanel({
             onChange={(val) => onUpdateAnimation(layer.id, { speed: val })}
           />
           <SliderRow
-            label="Pulse Amplitude"
+            label={a.syncToMusic ? 'Music Reactivity' : 'Pulse Amplitude'}
             value={a.amplitude}
             min={0}
             max={1.5}

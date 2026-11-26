@@ -37,6 +37,7 @@ interface LayerPanelProps {
   onUpdateEnvironment: (patch: Partial<AuraEnvironment>) => void;
   onUpdateAudio: (audio: AuraAudioConfig | undefined) => void;
   onSetLevitate: (levitate: boolean) => void;
+  onToggleAllMusicSync: (enabled: boolean) => void;
   onNotify: (text: string, kind?: 'info' | 'error') => void;
 }
 
@@ -65,6 +66,7 @@ export function LayerPanel({
   onUpdateEnvironment,
   onUpdateAudio,
   onSetLevitate,
+  onToggleAllMusicSync,
   onNotify,
 }: LayerPanelProps) {
   const [tab, setTab] = useState<'layers' | 'aura'>('layers');
@@ -73,6 +75,9 @@ export function LayerPanel({
 
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
   const previewRarity = classifyBaseOdds(project.rarity.baseOdds);
+  const syncedLayerCount = project.layers.filter((l) => l.animation.syncToMusic).length;
+  const allLayersSynced =
+    project.layers.length > 0 && syncedLayerCount === project.layers.length;
 
   const handleSongFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -296,6 +301,22 @@ export function LayerPanel({
                     : 'Upload Song'}
               </span>
             </button>
+            {project.audio && project.layers.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onToggleAllMusicSync(!allLayersSynced)}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                  allLayersSynced
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] text-slate-300'
+                }`}
+              >
+                <span>Sync All Movement to Song</span>
+                <span className="font-mono-num">
+                  {syncedLayerCount}/{project.layers.length}
+                </span>
+              </button>
+            )}
           </div>
         </>
       ) : (
@@ -574,6 +595,23 @@ export function LayerPanel({
 
             {project.audio && (
               <div className="bg-[#141824] border border-white/[0.07] rounded-lg p-3 space-y-3">
+                <label className="flex items-center justify-between gap-2 pb-2 border-b border-white/[0.06] cursor-pointer">
+                  <div>
+                    <div className="text-[11px] font-semibold text-sky-300">
+                      Sync All Movement to Song
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Every layer follows the song&apos;s rhythm ({syncedLayerCount}/{project.layers.length})
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={allLayersSynced}
+                    onChange={(e) => onToggleAllMusicSync(e.target.checked)}
+                    className="accent-sky-400 w-4 h-4 shrink-0"
+                  />
+                </label>
+
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-slate-100 truncate">
                     {project.audio.fileName}

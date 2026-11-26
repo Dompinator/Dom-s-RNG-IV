@@ -27,11 +27,8 @@ import {
 } from '../game/gameRegistry';
 import {
   getOrCreateSessionId,
-  loadSavedNickname,
   publishPlayerState,
   removePlayerPresence,
-  resolveDisplayName,
-  saveNickname,
   subscribeToServerPlayers,
   type LocalPlayerTransform,
   type RemotePlayerState,
@@ -42,8 +39,10 @@ interface BaseplatePlayViewProps {
   storage: StoredAuraEntry[];
   equippedAuraId: string | null;
   totalRolls: number;
+  isAdmin: boolean;
   authUser: User | null;
-  onSignIn: () => void;
+  accountUsername: string;
+  onOpenAuth: () => void;
   onSignOut: () => void;
   onOpenStorage: () => void;
   onOpenRegistry: () => void;
@@ -56,8 +55,10 @@ export function BaseplatePlayView({
   storage,
   equippedAuraId,
   totalRolls,
+  isAdmin,
   authUser,
-  onSignIn,
+  accountUsername,
+  onOpenAuth,
   onSignOut,
   onOpenStorage,
   onOpenRegistry,
@@ -68,11 +69,7 @@ export function BaseplatePlayView({
   const engineRef = useRef<BaseplateWorldEngine | null>(null);
 
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
-  const [customNick, setCustomNick] = useState<string>(() => loadSavedNickname());
-  const displayName = useMemo(
-    () => resolveDisplayName(authUser, customNick),
-    [authUser, customNick],
-  );
+  const displayName = accountUsername.trim().slice(0, 24) || 'Player';
   const displayNameRef = useRef(displayName);
   displayNameRef.current = displayName;
 
@@ -380,7 +377,7 @@ export function BaseplatePlayView({
           >
             <span className="flex items-center gap-2">
               <Database className="w-4 h-4 text-sky-400" />
-              <span>Roll Pool Manager</span>
+              <span>{isAdmin ? 'Roll Pool Manager' : 'Roll Pool'}</span>
             </span>
             <span className="font-mono-num text-[11px] text-slate-400">
               {enabledPool.length}
@@ -434,36 +431,41 @@ export function BaseplatePlayView({
           {playersPanelOpen && (
             <div className="px-3 pb-2.5 pt-1 border-t border-white/[0.07] space-y-2">
               {isJoinedServer ? (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={customNick}
-                    maxLength={24}
-                    placeholder={displayName}
-                    onChange={(e) => {
-                      setCustomNick(e.target.value);
-                      saveNickname(e.target.value);
-                    }}
-                    title="Your public display name"
-                    className="flex-1 min-w-0 bg-black/40 border border-white/[0.1] rounded px-2 py-1 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500/60"
-                  />
+                <div className="flex items-center justify-between gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onOpenAuth}
+                    title="Edit account display username"
+                    className="flex-1 min-w-0 text-left bg-black/40 hover:bg-black/60 border border-white/[0.1] rounded px-2 py-1 text-[11px] text-slate-100 truncate cursor-pointer"
+                  >
+                    {displayName}
+                  </button>
                   <button
                     type="button"
                     onClick={onSignOut}
-                    title="Leave multiplayer presence (Sign out)"
+                    title="Sign Out"
                     className="p-1.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-300 cursor-pointer"
                   >
                     <LogOut className="w-3 h-3" />
                   </button>
                 </div>
+              ) : authUser && !authUser.emailVerified ? (
+                <button
+                  type="button"
+                  onClick={onOpenAuth}
+                  className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-[11px] font-semibold text-amber-200 transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Verify Email to Join</span>
+                </button>
               ) : (
                 <button
                   type="button"
-                  onClick={onSignIn}
+                  onClick={onOpenAuth}
                   className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-[11px] font-semibold text-sky-200 transition-colors cursor-pointer"
                 >
                   <LogIn className="w-3.5 h-3.5" />
-                  <span>Join Server (Google)</span>
+                  <span>Log In / Sign Up to Join</span>
                 </button>
               )}
 
@@ -616,13 +618,15 @@ export function BaseplatePlayView({
           <div className="text-xs text-slate-300">
             No rollable auras in the Roll Pool yet.
           </div>
-          <button
-            type="button"
-            onClick={onOpenRegistry}
-            className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-          >
-            Open Roll Pool Manager
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onOpenRegistry}
+              className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+            >
+              Open Roll Pool Manager
+            </button>
+          )}
         </div>
       )}
 

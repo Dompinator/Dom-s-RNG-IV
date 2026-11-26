@@ -92,6 +92,7 @@ export interface Vec3 {
 
 export interface LayerAnimationSettings {
   mode: AnimationMode;
+  syncToMusic?: boolean;
   speed: number;
   amplitude: number;
   frequency: number;

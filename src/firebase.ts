@@ -1,10 +1,15 @@
 import { initializeApp } from 'firebase/app';
 import {
+  createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  reload,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   type User,
 } from 'firebase/auth';
 import {
@@ -87,5 +92,14 @@ async function testConnection(): Promise<void> {
 
 void testConnection();
 
-export { onAuthStateChanged, signInWithPopup, signOut };
+export {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  reload,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+};
 export type { User };
