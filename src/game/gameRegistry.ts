@@ -4,7 +4,7 @@ import { validateAuraProject } from '../aura/validator';
 export interface CatalogAuraEntry {
   project: AuraProject;
   enabled: boolean;
-  source: 'studio' | 'imported';
+  source: 'studio' | 'imported' | 'global';
   addedAt: string;
 }
 
@@ -42,10 +42,14 @@ export function loadGameState(): GameSaveState {
           if (item && typeof item === 'object') {
             const val = validateAuraProject(item.project);
             if (val.ok) {
+              const source =
+                item.source === 'studio' || item.source === 'global'
+                  ? item.source
+                  : 'imported';
               catalog.push({
                 project: val.project,
                 enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
-                source: item.source === 'studio' ? 'studio' : 'imported',
+                source,
                 addedAt:
                   typeof item.addedAt === 'string'
                     ? item.addedAt

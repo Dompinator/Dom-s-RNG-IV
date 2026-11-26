@@ -183,7 +183,7 @@ export function BaseplatePlayView({
           >
             <span className="flex items-center gap-2">
               <Database className="w-4 h-4 text-sky-400" />
-              <span>Aura Registry</span>
+              <span>Roll Pool Manager</span>
             </span>
             <span className="font-mono-num text-[11px] text-slate-400">
               {enabledPool.length}
@@ -288,13 +288,13 @@ export function BaseplatePlayView({
           <div className="text-xs text-slate-300">
             No rollable auras in the Roll Pool yet.
           </div>
-          <button
-            type="button"
-            onClick={onOpenRegistry}
-            className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-          >
-            Import Exported Auras in Aura Registry
-          </button>
+            <button
+              type="button"
+              onClick={onOpenRegistry}
+              className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+            >
+              Open Roll Pool Manager
+            </button>
         </div>
       )}
 

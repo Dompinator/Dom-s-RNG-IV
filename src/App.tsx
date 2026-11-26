@@ -44,6 +44,10 @@ import {
   type CatalogAuraEntry,
   type StoredAuraEntry,
 } from './game/gameRegistry';
+import {
+  fetchGlobalRollPool,
+  mergeGlobalIntoCatalog,
+} from './game/globalPoolSync';
 
 interface ToastMessage {
   id: number;
@@ -113,6 +117,38 @@ export default function App() {
       setToast(null);
     }, 3600);
   }, []);
+
+  // Load published cross-device Roll Pool on mount
+  useEffect(() => {
+    let active = true;
+    fetchGlobalRollPool().then((globalEntries) => {
+      if (!active || globalEntries.length === 0) return;
+      setCatalog((prev) => {
+        const merged = mergeGlobalIntoCatalog(prev, globalEntries);
+        saveCatalog(merged);
+        return merged;
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleSyncGlobalPool = useCallback(async () => {
+    const globalEntries = await fetchGlobalRollPool();
+    if (globalEntries.length === 0) {
+      showToast('No published global auras found on GitHub Pages yet.');
+      return;
+    }
+    setCatalog((prev) => {
+      const merged = mergeGlobalIntoCatalog(prev, globalEntries);
+      saveCatalog(merged);
+      return merged;
+    });
+    showToast(
+      `Synced ${globalEntries.length} published aura${globalEntries.length === 1 ? '' : 's'} from GitHub Pages.`,
+    );
+  }, [showToast]);
 
   // Studio History & Edits
   const commitChange = useCallback((updater: (prev: AuraProject) => AuraProject) => {
@@ -371,7 +407,12 @@ export default function App() {
       const idx = prev.findIndex((c) => c.project.id === prepared.id);
       const next = [...prev];
       if (idx >= 0) {
-        next[idx] = { ...next[idx], project: prepared, enabled: true };
+        next[idx] = {
+          ...next[idx],
+          project: prepared,
+          enabled: true,
+          source: 'studio',
+        };
       } else {
         next.unshift({
           project: prepared,
@@ -383,7 +424,7 @@ export default function App() {
       saveCatalog(next);
       return next;
     });
-    showToast(`"${prepared.name}" published to Baseplate Roll Pool (${prepared.rarity.classification}).`);
+    showToast(`"${prepared.name}" updated in Roll Pool (${prepared.rarity.classification}).`);
   };
 
   // Game Registry / Storage / Equip Handlers
@@ -508,6 +549,7 @@ export default function App() {
           };
           return {
             ...entry,
+            source: entry.source === 'global' ? 'studio' : entry.source,
             enabled: patch.enabled !== undefined ? patch.enabled : entry.enabled,
             project: nextProject,
           };
@@ -588,6 +630,7 @@ export default function App() {
         onPublishToRollPool={handlePublishToRollPool}
         onOpenRegistry={() => setRegistryOpen(true)}
         onOpenStorage={() => setStorageOpen(true)}
+        rollPoolCount={catalog.length}
       />
 
       <input
@@ -682,6 +725,7 @@ export default function App() {
         onGrantToStorage={handleGrantToStorage}
         onOpenInStudio={handleOpenInStudio}
         onResetDefaults={handleResetCatalogDefaults}
+        onSyncGlobalPool={handleSyncGlobalPool}
         onNotify={showToast}
       />
 

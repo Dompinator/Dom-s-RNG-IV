@@ -1,4 +1,5 @@
 import {
+  Database,
   Download,
   FolderOpen,
   Gamepad2,
@@ -33,6 +34,7 @@ interface TopToolbarProps {
   onPublishToRollPool: () => void;
   onOpenRegistry: () => void;
   onOpenStorage: () => void;
+  rollPoolCount: number;
 }
 
 export function TopToolbar({
@@ -53,6 +55,7 @@ export function TopToolbar({
   onPublishToRollPool,
   onOpenRegistry,
   onOpenStorage,
+  rollPoolCount,
 }: TopToolbarProps) {
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
 
@@ -92,14 +95,29 @@ export function TopToolbar({
         </div>
 
         {mode === 'studio' && (
-          <button
-            type="button"
-            onClick={onOpenLibrary}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 border border-white/[0.07] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-            <span>Projects</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onOpenLibrary}
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 border border-white/[0.07] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+              <span>Projects</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenRegistry}
+              title="View, open, edit, and publish auras in the Roll Pool"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 border border-white/[0.07] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Database className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden md:inline">Roll Pool Manager</span>
+              <span className="md:hidden">Roll Pool</span>
+              <span className="font-mono-num text-[11px] text-slate-400">
+                {rollPoolCount}
+              </span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -219,7 +237,7 @@ export function TopToolbar({
             onClick={onOpenRegistry}
             className="px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors whitespace-nowrap cursor-pointer"
           >
-            Import &amp; Edit Roll Pool
+            Roll Pool Manager
           </button>
         </div>
       )}
