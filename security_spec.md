@@ -2,12 +2,12 @@
 
 ## 1. Data Invariants
 1. All document IDs (`auraId`, `userId`, `sessionId`) must match `^[a-zA-Z0-9_\\-]+$` and have length `1..128`.
-2. Every `rollPool/{auraId}` document is non-PII game catalog data readable by all visitors/players (`resource.data.id is string && resource.data.enabled is bool`) so every device can roll auras immediately.
+2. Every `rollPool/{auraId}` document is non-PII game catalog data readable by all visitors/players using bounded list queries (`request.query.limit >= 1 && request.query.limit <= 500`) so every device can roll auras immediately without enabling unbounded scraping.
 3. Only the verified creator/admin (`codompic@gmail.com` with `email_verified == true` or a trusted `/admins/{uid}` document) can `create`, `update`, or `delete` entries in `/rollPool/{auraId}`.
 4. `createdAt` and `authorUid` are immutable after creation; `createdAt == request.time` on create and `updatedAt == request.time` on create and update.
 5. Exact allowed and required keys are enforced on `create` (`hasAll` + `hasOnly`), and `affectedKeys().hasOnly(...)` is enforced on `update`.
 6. Native Maps and Lists are used for `project` (never JSON strings), with bounded string sizes (`name` 1..64, `description` 0..240) and bounded `project.layers` size (`<= 64`).
-7. Every `/players/{sessionId}` document contains zero PII (no email, phone, or profile URL), is owned by `ownerUid == request.auth.uid` (verified user), enforces world coordinate bounds (`x/z` within `[-80, 80]`, `y` within `[-5, 60]`), strict pose enum (`idle|walk|jump|levitate|levitate_walk`), `displayName` 1..24 chars, `equippedAuraId` `<= 128` chars, and server `updatedAt == request.time`.
+7. Every `/players/{sessionId}` document contains zero PII (no email, phone, or profile URL), is readable via bounded list queries (`request.query.limit >= 1 && request.query.limit <= 100`), is owned by `ownerUid == request.auth.uid` (verified user), enforces world coordinate bounds (`x/z` within `[-80, 80]`, `y` within `[-5, 60]`), strict pose enum (`idle|walk|jump|levitate|levitate_walk`), `displayName` 1..24 chars, `equippedAuraId` `<= 128` chars, and server `updatedAt == request.time`.
 8. Every `/accounts/{userId}` document is strictly private to the owner (`request.auth.uid == userId && isVerified()`), contains zero PII (no email/phone), validates `uid == userId`, `username` (`1..24` chars), bounded `storage` array (`<= 200` validated entries), `totalRolls >= 0`, `equippedAuraId <= 128` chars, immutable `uid`/`createdAt`, and server timestamps.
 
 ## 2. The "Dirty Dozen" Attack Payloads (Must Return `PERMISSION_DENIED`)

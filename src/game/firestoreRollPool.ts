@@ -3,7 +3,9 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -92,10 +94,10 @@ export function subscribeToRollPool(
   onUpdate: (entries: CatalogAuraEntry[]) => void,
   onError?: (err: Error) => void,
 ): Unsubscribe {
-  const colRef = collection(db, COLLECTION_PATH);
+  const poolQuery = query(collection(db, COLLECTION_PATH), limit(500));
 
   return onSnapshot(
-    colRef,
+    poolQuery,
     (snapshot) => {
       const entries: CatalogAuraEntry[] = [];
 

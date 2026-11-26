@@ -2,7 +2,9 @@ import {
   collection,
   deleteDoc,
   doc,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   type Unsubscribe,
@@ -184,7 +186,7 @@ export function subscribeToServerPlayers(
   onError?: (err: Error) => void,
 ): ServerPlayersSubscription {
   const safeLocalId = sanitizeAuraDocId(localSessionId);
-  const colRef = collection(db, PLAYERS_COLLECTION);
+  const playersQuery = query(collection(db, PLAYERS_COLLECTION), limit(100));
 
   const latestBySession = new Map<
     string,
@@ -206,7 +208,7 @@ export function subscribeToServerPlayers(
   };
 
   const unsubscribe = onSnapshot(
-    colRef,
+    playersQuery,
     (snapshot) => {
       const now = Date.now();
       const presentIds = new Set<string>();

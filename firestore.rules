@@ -32,7 +32,11 @@ service cloud.firestore {
 
     function isAdmin() {
       return isVerified() && (
-        request.auth.token.email.lower() == 'codompic@gmail.com' ||
+        (
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          request.auth.token.email.lower() == 'codompic@gmail.com'
+        ) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -120,9 +124,11 @@ service cloud.firestore {
     }
 
     match /rollPool/{auraId} {
-      // Public non-PII game catalog readable on any device (including GitHub Pages)
+      // Public non-PII game catalog readable on any device with bounded list queries
       allow get: if isValidId(auraId);
-      allow list: if resource.data.id is string && resource.data.enabled is bool;
+      allow list: if request.query.limit is int
+        && request.query.limit >= 1
+        && request.query.limit <= 500;
 
       allow create: if isAdmin()
         && isValidId(auraId)
@@ -147,11 +153,11 @@ service cloud.firestore {
     }
 
     match /players/{sessionId} {
-      // Public non-PII world coordinates/pose/auraId so everyone in the shared server sees each other
+      // Public non-PII world coordinates/pose/auraId with bounded list queries
       allow get: if isValidId(sessionId);
-      allow list: if resource.data.sessionId is string
-        && resource.data.ownerUid is string
-        && resource.data.displayName is string;
+      allow list: if request.query.limit is int
+        && request.query.limit >= 1
+        && request.query.limit <= 100;
 
       allow create: if isVerified()
         && isValidId(sessionId)
@@ -203,7 +209,7 @@ service cloud.firestore {
 
     match /admins/{userId} {
       allow get: if isAdmin() && isValidId(userId);
-      allow list: if isAdmin() && resource.data.uid is string;
+      allow list: if false;
       allow create: if isAdmin()
         && isValidId(userId)
         && incoming().keys().hasAll(['uid', 'createdAt'])
