@@ -5,15 +5,19 @@ import {
   Eye,
   EyeOff,
   Layers,
+  Music,
   Plus,
   SlidersHorizontal,
   Trash2,
+  Upload,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { encodeAudioFileForAura } from '../aura/audioEncoder';
 import { classifyBaseOdds, formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import {
   ANCHOR_LABELS,
   EFFECT_CATALOG,
+  type AuraAudioConfig,
   type AuraEnvironment,
   type AuraLayer,
   type AuraProject,
@@ -31,6 +35,9 @@ interface LayerPanelProps {
   onUpdateProjectMeta: (patch: Partial<Pick<AuraProject, 'name' | 'description' | 'author'>>) => void;
   onUpdateBaseOdds: (baseOdds: number) => void;
   onUpdateEnvironment: (patch: Partial<AuraEnvironment>) => void;
+  onUpdateAudio: (audio: AuraAudioConfig | undefined) => void;
+  onSetLevitate: (levitate: boolean) => void;
+  onNotify: (text: string, kind?: 'info' | 'error') => void;
 }
 
 const EFFECT_LABEL_MAP = Object.fromEntries(
@@ -56,11 +63,38 @@ export function LayerPanel({
   onUpdateProjectMeta,
   onUpdateBaseOdds,
   onUpdateEnvironment,
+  onUpdateAudio,
+  onSetLevitate,
+  onNotify,
 }: LayerPanelProps) {
   const [tab, setTab] = useState<'layers' | 'aura'>('layers');
+  const [isEncodingAudio, setIsEncodingAudio] = useState(false);
+  const songInputRef = useRef<HTMLInputElement | null>(null);
 
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
   const previewRarity = classifyBaseOdds(project.rarity.baseOdds);
+
+  const handleSongFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setIsEncodingAudio(true);
+    try {
+      const { audio, optimizedNote } = await encodeAudioFileForAura(file, project.audio);
+      onUpdateAudio(audio);
+      onNotify(
+        optimizedNote ?? `Attached spatial aura song "${audio.fileName}".`,
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error ? err.message : 'Failed to load audio file.',
+        'error',
+      );
+    } finally {
+      setIsEncodingAudio(false);
+    }
+  };
 
   return (
     <aside className="w-72 xl:w-80 shrink-0 h-full bg-[#0e1119] border-r border-white/[0.08] flex flex-col select-none">
@@ -93,6 +127,15 @@ export function LayerPanel({
           </button>
         </div>
       </div>
+
+      {/* Hidden Audio Upload Input */}
+      <input
+        ref={songInputRef}
+        type="file"
+        accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm"
+        onChange={handleSongFileChange}
+        className="hidden"
+      />
 
       {tab === 'layers' ? (
         <>
@@ -217,6 +260,43 @@ export function LayerPanel({
               })
             )}
           </div>
+
+          {/* Quick Upload Song Bar directly accessible in Layers tab */}
+          <div className="p-2.5 border-t border-white/[0.08] bg-[#0b0e16] space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Music className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="text-[11px] text-slate-300 truncate">
+                  {project.audio ? project.audio.fileName : 'No aura song attached'}
+                </span>
+              </div>
+              {project.audio && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateAudio(undefined)}
+                  title="Remove Aura Song"
+                  className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-white/[0.06] cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => songInputRef.current?.click()}
+              disabled={isEncodingAudio}
+              className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-md bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>
+                {isEncodingAudio
+                  ? 'Processing Audio...'
+                  : project.audio
+                    ? 'Replace Song'
+                    : 'Upload Song'}
+              </span>
+            </button>
+          </div>
         </>
       ) : (
         <div className="flex-1 overflow-y-auto p-3.5 space-y-5">
@@ -261,6 +341,22 @@ export function LayerPanel({
                 className="w-full bg-[#151a26] border border-white/[0.08] focus:border-amber-500/70 rounded-md px-2.5 py-1.5 text-xs text-slate-200 outline-none resize-none"
               />
             </div>
+            <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-3 py-2 cursor-pointer">
+              <div>
+                <div className="text-xs font-medium text-slate-100">
+                  Levitate In-Game
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Player hovers in mid-air while equipping this aura
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={Boolean(project.levitate)}
+                onChange={(e) => onSetLevitate(e.target.checked)}
+                className="accent-amber-500 w-4 h-4 shrink-0"
+              />
+            </label>
           </section>
 
           <hr className="border-white/[0.07]" />
@@ -434,6 +530,163 @@ export function LayerPanel({
                 className="w-full studio-slider"
               />
             </div>
+          </section>
+
+          <hr className="border-white/[0.07]" />
+
+          {/* Spatial 3D Aura Audio */}
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <Music className="w-3.5 h-3.5 text-sky-400" />
+                <span>Spatial Aura Song</span>
+              </h3>
+              {project.audio && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateAudio(undefined)}
+                  className="text-[11px] text-rose-400 hover:text-rose-300 cursor-pointer"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Plays directly from the character&apos;s aura in 3D space so nearby players hear it coming from the aura.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => songInputRef.current?.click()}
+              disabled={isEncodingAudio}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-md bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>
+                {isEncodingAudio
+                  ? 'Processing Audio...'
+                  : project.audio
+                    ? 'Replace Song File'
+                    : 'Upload Song'}
+              </span>
+            </button>
+
+            {project.audio && (
+              <div className="bg-[#141824] border border-white/[0.07] rounded-lg p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-100 truncate">
+                    {project.audio.fileName}
+                  </span>
+                  <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={project.audio.loop}
+                      onChange={(e) =>
+                        onUpdateAudio({
+                          ...project.audio!,
+                          loop: e.target.checked,
+                        })
+                      }
+                      className="accent-sky-400"
+                    />
+                    <span>Loop</span>
+                  </label>
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-slate-400">Volume</span>
+                    <span className="font-mono-num text-slate-200">
+                      {Math.round(project.audio.volume * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.02}
+                    value={project.audio.volume}
+                    onChange={(e) =>
+                      onUpdateAudio({
+                        ...project.audio!,
+                        volume: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full studio-slider"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-slate-400">Full Volume Radius</span>
+                    <span className="font-mono-num text-slate-200">
+                      {project.audio.refDistance.toFixed(0)}m
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={2}
+                    max={25}
+                    step={1}
+                    value={project.audio.refDistance}
+                    onChange={(e) =>
+                      onUpdateAudio({
+                        ...project.audio!,
+                        refDistance: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full studio-slider"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-slate-400">Max Hearing Range</span>
+                    <span className="font-mono-num text-slate-200">
+                      {project.audio.maxDistance.toFixed(0)}m
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={10}
+                    max={120}
+                    step={2}
+                    value={project.audio.maxDistance}
+                    onChange={(e) =>
+                      onUpdateAudio({
+                        ...project.audio!,
+                        maxDistance: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full studio-slider"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-[11px] mb-1">
+                    <span className="text-slate-400">Distance Falloff</span>
+                    <span className="font-mono-num text-slate-200">
+                      {project.audio.rolloffFactor.toFixed(1)}x
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.3}
+                    max={3.5}
+                    step={0.1}
+                    value={project.audio.rolloffFactor}
+                    onChange={(e) =>
+                      onUpdateAudio({
+                        ...project.audio!,
+                        rolloffFactor: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full studio-slider"
+                  />
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}

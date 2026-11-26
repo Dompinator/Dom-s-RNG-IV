@@ -3,8 +3,11 @@ import {
   Check,
   Database,
   Dices,
+  Music,
   RotateCcw,
   Sparkles,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
@@ -42,6 +45,7 @@ export function BaseplatePlayView({
 
   const [isRolling, setIsRolling] = useState(false);
   const [autoRoll, setAutoRoll] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
   const [previewRollName, setPreviewRollName] = useState<string>('');
   const [rolledReveal, setRolledReveal] = useState<AuraProject | null>(null);
 
@@ -80,6 +84,10 @@ export function BaseplatePlayView({
   useEffect(() => {
     engineRef.current?.setEquippedAura(equippedAura);
   }, [equippedAura]);
+
+  useEffect(() => {
+    engineRef.current?.setAudioMuted(audioMuted);
+  }, [audioMuted]);
 
   const performRoll = () => {
     if (isRolling || enabledPool.length === 0) return;
@@ -145,6 +153,26 @@ export function BaseplatePlayView({
                   {formatOdds(equippedAura.rarity.baseOdds)}
                 </span>
               </div>
+              {equippedAura.audio && (
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-sky-300">
+                  <span className="flex items-center gap-1 truncate">
+                    <Music className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{equippedAura.audio.fileName}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAudioMuted((m) => !m)}
+                    title={audioMuted ? 'Unmute Aura Audio' : 'Mute Aura Audio'}
+                    className="p-1 rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 cursor-pointer shrink-0"
+                  >
+                    {audioMuted ? (
+                      <VolumeX className="w-3 h-3 text-slate-400" />
+                    ) : (
+                      <Volume2 className="w-3 h-3 text-sky-400" />
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm font-medium text-slate-400 mt-0.5">

@@ -16,7 +16,7 @@ export interface R6Rig {
   anchors: Record<AnchorPoint, THREE.Object3D>;
   update: (
     elapsed: number,
-    pose: CharacterPoseMode | 'walk' | 'jump',
+    pose: CharacterPoseMode | 'walk' | 'jump' | 'levitate_walk',
     moveIntensity?: number,
   ) => void;
   dispose: () => void;
@@ -203,7 +203,7 @@ export function createR6Character(): R6Rig {
 
   const update = (
     elapsed: number,
-    pose: CharacterPoseMode | 'walk' | 'jump',
+    pose: CharacterPoseMode | 'walk' | 'jump' | 'levitate_walk',
     moveIntensity = 1,
   ) => {
     if (pose === 'paused') return;
@@ -245,6 +245,20 @@ export function createR6Character(): R6Rig {
       rightArm.rotation.set(0, 0, -Math.PI * 0.47);
       leftLeg.rotation.set(0, 0, 0);
       rightLeg.rotation.set(0, 0, 0);
+      return;
+    }
+
+    if (pose === 'levitate_walk') {
+      const hover = Math.sin(elapsed * 2.4) * 0.12 + 0.42;
+      const lean = 0.24 * Math.min(1.2, moveIntensity);
+      bodyRoot.position.set(0, hover, 0);
+      torso.position.set(0, 1.5, 0);
+      torso.rotation.set(lean, Math.sin(elapsed * 1.4) * 0.04, 0);
+      head.rotation.set(-lean * 0.65, 0, 0);
+      leftArm.rotation.set(0.32, 0, 0.32 + Math.sin(elapsed * 2.4) * 0.05);
+      rightArm.rotation.set(0.32, 0, -0.32 - Math.sin(elapsed * 2.4) * 0.05);
+      leftLeg.rotation.set(0.34 + Math.sin(elapsed * 2.2) * 0.06, 0, 0.05);
+      rightLeg.rotation.set(0.46 + Math.cos(elapsed * 2.2) * 0.06, 0, -0.05);
       return;
     }
 

@@ -19,6 +19,7 @@ import {
   type CompiledLayerRuntime,
 } from './layerBuilder';
 import { createR6Character, type R6Rig } from './r6Character';
+import { SpatialAuraAudioController } from './spatialAudio';
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -90,6 +91,7 @@ export class AuraViewportEngine {
   private envRT: THREE.WebGLRenderTarget;
   private contactShadowTex: THREE.CanvasTexture;
   private stageDisposables: { dispose: () => void }[] = [];
+  private spatialAudio: SpatialAuraAudioController;
 
   constructor(container: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.container = container;
@@ -240,12 +242,19 @@ export class AuraViewportEngine {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    this.spatialAudio = new SpatialAuraAudioController(this.camera);
+    this.renderer.domElement.addEventListener('pointerdown', this.handleAudioUnlock);
+
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
 
     this.lastNow = performance.now();
     this.tick();
   }
+
+  private handleAudioUnlock = () => {
+    void this.spatialAudio.resumeContext();
+  };
 
   private handleContextLost = (e: Event) => {
     e.preventDefault();
@@ -277,6 +286,11 @@ export class AuraViewportEngine {
     this.currentProject = project;
     this.applyEnvironment(project.environment);
     this.syncLayers(project.layers);
+    this.spatialAudio.setAuraAudio(this.rig.anchors.root, project.audio);
+  }
+
+  public setAudioMuted(muted: boolean) {
+    this.spatialAudio.setMuted(muted);
   }
 
   private applyEnvironment(env: AuraEnvironment) {
@@ -470,8 +484,11 @@ export class AuraViewportEngine {
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
     this.resizeObserver.disconnect();
+    this.renderer.domElement.removeEventListener('pointerdown', this.handleAudioUnlock);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored);
+
+    this.spatialAudio.dispose();
 
     for (const runtime of this.runtimes.values()) {
       runtime.dispose();

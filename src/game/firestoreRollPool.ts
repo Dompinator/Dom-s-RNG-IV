@@ -65,6 +65,16 @@ function buildSanitizedProject(project: AuraProject, safeId: string): AuraProjec
   const layers = project.layers.slice(0, 64);
   const rarity = classifyBaseOdds(project.rarity.baseOdds);
 
+  const safeAudio =
+    project.audio &&
+    typeof project.audio.dataUrl === 'string' &&
+    project.audio.dataUrl.length <= 920_000
+      ? {
+          ...project.audio,
+          fileName: project.audio.fileName.slice(0, 96) || 'aura-theme.audio',
+        }
+      : undefined;
+
   return stripUndefinedDeep({
     ...project,
     id: safeId,
@@ -73,6 +83,8 @@ function buildSanitizedProject(project: AuraProject, safeId: string): AuraProjec
     rarity,
     layers,
     textures: collectUsedTextures(layers),
+    ...(safeAudio ? { audio: safeAudio } : { audio: undefined }),
+    ...(typeof project.levitate === 'boolean' ? { levitate: project.levitate } : {}),
   });
 }
 

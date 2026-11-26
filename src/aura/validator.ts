@@ -9,6 +9,7 @@ import {
   EMISSION_SHAPES,
   ORBITER_SHAPES,
   TEXTURE_REFS,
+  type AuraAudioConfig,
   type AuraLayer,
   type AuraProject,
   type Vec3,
@@ -157,6 +158,31 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     typeof rarityRaw.baseOdds === 'number' ? rarityRaw.baseOdds : 1_000_000,
   );
 
+  let audio: AuraAudioConfig | undefined;
+  if (obj.audio && typeof obj.audio === 'object' && !Array.isArray(obj.audio)) {
+    const aRaw = obj.audio as Record<string, unknown>;
+    const rawUrl = typeof aRaw.dataUrl === 'string' ? aRaw.dataUrl.trim() : '';
+    const isSafeAudioUrl =
+      rawUrl.length > 0 &&
+      rawUrl.length <= 920_000 &&
+      /^data:audio\/[a-zA-Z0-9.+_-]+;base64,[A-Za-z0-9+/=]+$/.test(rawUrl);
+
+    if (isSafeAudioUrl) {
+      audio = {
+        fileName: sanitizeString(aRaw.fileName, 'aura-theme.audio', 96),
+        mimeType: sanitizeString(aRaw.mimeType, 'audio/mpeg', 48),
+        dataUrl: rawUrl,
+        volume: clamp(aRaw.volume, 0, 1, 0.75),
+        loop: typeof aRaw.loop === 'boolean' ? aRaw.loop : true,
+        refDistance: clamp(aRaw.refDistance, 1, 40, 6),
+        maxDistance: clamp(aRaw.maxDistance, 5, 140, 42),
+        rolloffFactor: clamp(aRaw.rolloffFactor, 0.1, 4, 1.4),
+      };
+    } else if (rawUrl.length > 0) {
+      warnings.push('Ignored unsupported or oversized aura audio payload.');
+    }
+  }
+
   const project: AuraProject = {
     formatVersion: AURA_FORMAT_VERSION,
     engine: AURA_TARGET_ENGINE,
@@ -175,6 +201,8 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     },
     layers,
     textures: Array.from(new Set(layers.map((l) => l.textureRef))),
+    ...(audio ? { audio } : {}),
+    ...(typeof obj.levitate === 'boolean' ? { levitate: obj.levitate } : {}),
   };
 
   return { ok: true, project, warnings };

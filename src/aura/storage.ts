@@ -118,6 +118,21 @@ export async function exportAuraPackageZip(project: AuraProject): Promise<string
     textureManifest[texRef] = relPath;
   }
 
+  let audioAssetPath: string | null = null;
+  if (prepared.audio?.dataUrl) {
+    try {
+      const res = await fetch(prepared.audio.dataUrl);
+      const audioBlob = await res.blob();
+      const extMatch = prepared.audio.fileName.match(/\.([a-zA-Z0-9]+)$/);
+      const ext = extMatch ? extMatch[1].toLowerCase() : 'audio';
+      const audioFile = `${slug}-theme.${ext}`;
+      audioAssetPath = `assets/audio/${audioFile}`;
+      rootFolder.folder('assets')!.folder('audio')!.file(audioFile, audioBlob);
+    } catch {
+      audioAssetPath = null;
+    }
+  }
+
   rootFolder.file('aura.json', JSON.stringify(prepared, null, 2));
 
   const manifest = {
@@ -132,6 +147,17 @@ export async function exportAuraPackageZip(project: AuraProject): Promise<string
     layerCount: prepared.layers.length,
     effectTypes: Array.from(new Set(prepared.layers.map((l) => l.type))),
     textures: textureManifest,
+    audio: audioAssetPath
+      ? {
+          path: audioAssetPath,
+          fileName: prepared.audio?.fileName,
+          volume: prepared.audio?.volume,
+          loop: prepared.audio?.loop,
+          refDistance: prepared.audio?.refDistance,
+          maxDistance: prepared.audio?.maxDistance,
+          rolloffFactor: prepared.audio?.rolloffFactor,
+        }
+      : null,
     entryConfig: 'aura.json',
   };
   rootFolder.file('manifest.json', JSON.stringify(manifest, null, 2));
@@ -145,6 +171,7 @@ export async function exportAuraPackageZip(project: AuraProject): Promise<string
     `Classification: ${prepared.rarity.classification}`,
     `Global Announcement (Mythic): ${prepared.rarity.globalAnnouncement ? 'Yes' : 'No'}`,
     `Layers: ${prepared.layers.length}`,
+    `Theme Song: ${prepared.audio ? prepared.audio.fileName : 'None'}`,
     ``,
     `Description:`,
     `${prepared.description}`,
@@ -153,6 +180,7 @@ export async function exportAuraPackageZip(project: AuraProject): Promise<string
     `- aura.json: Validated declarative aura configuration for AETHER runtime`,
     `- manifest.json: Asset & effect inventory`,
     `- assets/textures/: Procedural PNG textures referenced by layers`,
+    `- assets/audio/: Spatial audio file (if attached)`,
   ].join('\n');
   rootFolder.file('README.txt', readme);
 

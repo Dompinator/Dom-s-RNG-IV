@@ -27,6 +27,7 @@ import {
   setLastActiveProjectId,
 } from './aura/storage';
 import type {
+  AuraAudioConfig,
   AuraEnvironment,
   AuraLayer,
   AuraProject,
@@ -397,6 +398,25 @@ export default function App() {
     commitChange((prev) => ({
       ...prev,
       environment: { ...prev.environment, ...patch },
+    }));
+  };
+
+  const handleUpdateAudio = (audio: AuraAudioConfig | undefined) => {
+    commitChange((prev) => {
+      const next = { ...prev };
+      if (audio) {
+        next.audio = audio;
+      } else {
+        delete next.audio;
+      }
+      return next;
+    });
+  };
+
+  const handleSetLevitate = (levitate: boolean) => {
+    commitChange((prev) => ({
+      ...prev,
+      levitate,
     }));
   };
 
@@ -816,6 +836,9 @@ export default function App() {
                 onUpdateProjectMeta={handleUpdateProjectMeta}
                 onUpdateBaseOdds={handleUpdateBaseOdds}
                 onUpdateEnvironment={handleUpdateEnvironment}
+                onUpdateAudio={handleUpdateAudio}
+                onSetLevitate={handleSetLevitate}
+                onNotify={showToast}
               />
             )}
 
@@ -823,6 +846,7 @@ export default function App() {
               project={project}
               zenMode={zenMode}
               onToggleZenMode={() => setZenMode((z) => !z)}
+              onSetLevitate={handleSetLevitate}
             />
 
             {!zenMode && (

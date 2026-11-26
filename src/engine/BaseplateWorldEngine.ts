@@ -12,6 +12,7 @@ import {
   type CompiledLayerRuntime,
 } from './layerBuilder';
 import { createR6Character, type R6Rig } from './r6Character';
+import { SpatialAuraAudioController } from './spatialAudio';
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -141,6 +142,7 @@ export class BaseplateWorldEngine {
   private resizeObserver: ResizeObserver;
   private envRT: THREE.WebGLRenderTarget;
   private worldDisposables: { dispose: () => void }[] = [];
+  private spatialAudio: SpatialAuraAudioController;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -244,6 +246,7 @@ export class BaseplateWorldEngine {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    this.spatialAudio = new SpatialAuraAudioController(this.camera);
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
@@ -400,6 +403,7 @@ export class BaseplateWorldEngine {
     }
     const code = e.code;
     this.keys.add(code);
+    void this.spatialAudio.resumeContext();
     if (code === 'Space' && this.isGrounded) {
       this.playerVelY = JUMP_VELOCITY;
       this.isGrounded = false;
@@ -411,6 +415,7 @@ export class BaseplateWorldEngine {
   };
 
   private onPointerDown = (e: PointerEvent) => {
+    void this.spatialAudio.resumeContext();
     this.isDragging = true;
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
@@ -479,9 +484,15 @@ export class BaseplateWorldEngine {
         this.bloomPass.threshold = aura.environment.bloomThreshold;
       }
       this.syncLayers(aura.layers);
+      this.spatialAudio.setAuraAudio(this.rig.anchors.root, aura.audio);
     } else {
       this.syncLayers([]);
+      this.spatialAudio.setAuraAudio(this.rig.anchors.root, undefined);
     }
+  }
+
+  public setAudioMuted(muted: boolean) {
+    this.spatialAudio.setMuted(muted);
   }
 
   private syncLayers(layers: AuraLayer[]) {
@@ -617,13 +628,18 @@ export class BaseplateWorldEngine {
     (this.contactShadow.material as THREE.MeshBasicMaterial).opacity =
       0.65 * shadowScale;
 
-    // 4. Update R6 Animation Pose
+    // 4. Update R6 Animation Pose (respecting aura levitate mode in-game)
+    const isLevitate = Boolean(this.equippedAura?.levitate);
     if (!this.isGrounded) {
       this.rig.update(this.elapsed, 'jump');
     } else if (isMoving) {
-      this.rig.update(this.elapsed, 'walk', sprinting ? 1.25 : 0.95);
+      this.rig.update(
+        this.elapsed,
+        isLevitate ? 'levitate_walk' : 'walk',
+        sprinting ? 1.25 : 0.95,
+      );
     } else {
-      this.rig.update(this.elapsed, 'idle');
+      this.rig.update(this.elapsed, isLevitate ? 'levitate' : 'idle');
     }
 
     // 5. Keep Shadows & Rim Light centered on player
@@ -691,6 +707,8 @@ export class BaseplateWorldEngine {
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     dom.removeEventListener('wheel', this.onWheel);
+
+    this.spatialAudio.dispose();
 
     for (const runtime of this.runtimes.values()) {
       runtime.dispose();

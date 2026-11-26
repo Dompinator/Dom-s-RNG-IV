@@ -5,6 +5,7 @@ import {
   Download,
   LogIn,
   LogOut,
+  Music,
   PlusCircle,
   RotateCcw,
   Trash2,
@@ -417,8 +418,23 @@ export function AuraRegistryModal({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
                     <span>{p.layers.length} layers</span>
+                    {p.audio && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-sky-400 flex items-center gap-1">
+                          <Music className="w-3 h-3" />
+                          {p.audio.fileName}
+                        </span>
+                      </>
+                    )}
+                    {p.levitate && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-300">Levitate</span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
                     <span>
                       {entry.source === 'global'

@@ -33,7 +33,7 @@
         },
         "classification": {
           "type": "string",
-          "enum": ["Standard", "Epic", "Legendary", "Mythic"],
+          "enum": ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"],
           "description": "Automatically derived rarity classification."
         },
         "authorUid": {
@@ -44,7 +44,7 @@
         },
         "project": {
           "type": "object",
-          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures)."
+          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures, and optional spatial audio)."
         },
         "createdAt": {
           "type": "string",

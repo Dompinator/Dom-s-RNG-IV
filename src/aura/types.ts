@@ -154,6 +154,17 @@ export interface AuraRarityInfo {
   globalAnnouncement: boolean;
 }
 
+export interface AuraAudioConfig {
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  volume: number;
+  loop: boolean;
+  refDistance: number;
+  maxDistance: number;
+  rolloffFactor: number;
+}
+
 export interface AuraProject {
   formatVersion: string;
   engine: string;
@@ -166,6 +177,8 @@ export interface AuraProject {
   environment: AuraEnvironment;
   layers: AuraLayer[];
   textures: TextureRef[];
+  audio?: AuraAudioConfig;
+  levitate?: boolean;
 }
 
 export type CharacterPoseMode = 'idle' | 'levitate' | 'tpose' | 'paused';

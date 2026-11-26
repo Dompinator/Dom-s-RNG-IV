@@ -8,6 +8,8 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type {
@@ -21,6 +23,7 @@ interface ViewportCanvasProps {
   project: AuraProject;
   zenMode: boolean;
   onToggleZenMode: () => void;
+  onSetLevitate: (levitate: boolean) => void;
 }
 
 const POSE_OPTIONS: { value: CharacterPoseMode; label: string }[] = [
@@ -42,6 +45,7 @@ export function ViewportCanvas({
   project,
   zenMode,
   onToggleZenMode,
+  onSetLevitate,
 }: ViewportCanvasProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<AuraViewportEngine | null>(null);
@@ -49,10 +53,13 @@ export function ViewportCanvas({
   const [contextLost, setContextLost] = useState(false);
   const [playing, setPlaying] = useState(true);
   const [timeScale, setTimeScale] = useState(1.0);
-  const [poseMode, setPoseMode] = useState<CharacterPoseMode>('idle');
+  const [poseMode, setPoseMode] = useState<CharacterPoseMode>(
+    project.levitate ? 'levitate' : 'idle',
+  );
   const [showGrid, setShowGrid] = useState(true);
   const [showStage, setShowStage] = useState(true);
   const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [audioMuted, setAudioMuted] = useState(false);
 
   // Initialize Three.js engine once on mount
   useEffect(() => {
@@ -86,6 +93,14 @@ export function ViewportCanvas({
     engineRef.current?.setTimeScale(timeScale);
   }, [timeScale]);
 
+  // Sync poseMode when project.levitate changes or project switches
+  useEffect(() => {
+    setPoseMode((curr) => {
+      if (project.levitate) return 'levitate';
+      return curr === 'levitate' ? 'idle' : curr;
+    });
+  }, [project.id, project.levitate]);
+
   useEffect(() => {
     engineRef.current?.setPoseMode(poseMode);
   }, [poseMode]);
@@ -93,6 +108,10 @@ export function ViewportCanvas({
   useEffect(() => {
     engineRef.current?.setStageOptions({ showGrid, showStage });
   }, [showGrid, showStage]);
+
+  useEffect(() => {
+    engineRef.current?.setAudioMuted(audioMuted);
+  }, [audioMuted]);
 
   // Re-measure canvas when panels toggle
   useEffect(() => {
@@ -134,15 +153,34 @@ export function ViewportCanvas({
           </span>
         </div>
 
-        <button
-          type="button"
-          onClick={onToggleZenMode}
-          title={zenMode ? 'Show Studio Panels' : 'Expand Full Viewport'}
-          className="pointer-events-auto flex items-center gap-1.5 bg-[#0f131d]/90 hover:bg-[#181e2c] border border-white/[0.08] text-slate-200 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
-        >
-          {zenMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-          <span className="whitespace-nowrap">{zenMode ? 'Show Panels' : 'Full Viewport'}</span>
-        </button>
+        <div className="pointer-events-auto flex items-center gap-1.5">
+          {project.audio && (
+            <button
+              type="button"
+              onClick={() => setAudioMuted((m) => !m)}
+              title={audioMuted ? 'Unmute Aura Song' : 'Mute Aura Song'}
+              className="flex items-center gap-1.5 bg-[#0f131d]/90 hover:bg-[#181e2c] border border-white/[0.08] text-slate-200 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+            >
+              {audioMuted ? (
+                <VolumeX className="w-3.5 h-3.5 text-slate-400" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-sky-400" />
+              )}
+              <span className="hidden sm:inline whitespace-nowrap">
+                {audioMuted ? 'Muted' : 'Aura Audio'}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onToggleZenMode}
+            title={zenMode ? 'Show Studio Panels' : 'Expand Full Viewport'}
+            className="flex items-center gap-1.5 bg-[#0f131d]/90 hover:bg-[#181e2c] border border-white/[0.08] text-slate-200 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
+          >
+            {zenMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="whitespace-nowrap">{zenMode ? 'Show Panels' : 'Full Viewport'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Unified Bottom Viewport Control Dock */}
@@ -211,7 +249,14 @@ export function ViewportCanvas({
                   <button
                     key={opt.value}
                     type="button"
-                    onClick={() => setPoseMode(opt.value)}
+                    onClick={() => {
+                      setPoseMode(opt.value);
+                      if (opt.value === 'levitate') {
+                        onSetLevitate(true);
+                      } else if (opt.value === 'idle') {
+                        onSetLevitate(false);
+                      }
+                    }}
                     className={`px-2 py-1 text-[11px] font-medium rounded whitespace-nowrap transition-colors cursor-pointer ${
                       poseMode === opt.value
                         ? 'bg-white/[0.14] text-white'
