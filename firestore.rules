@@ -66,6 +66,29 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidPlayerPresence(data, sessionId) {
+      return data.keys().hasAll([
+          'sessionId', 'ownerUid', 'displayName', 'x', 'y', 'z',
+          'yaw', 'pose', 'moveSpeed', 'equippedAuraId', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'sessionId', 'ownerUid', 'displayName', 'x', 'y', 'z',
+          'yaw', 'pose', 'moveSpeed', 'equippedAuraId', 'updatedAt'
+        ])
+        && isValidId(data.sessionId)
+        && data.sessionId == sessionId
+        && isValidId(data.ownerUid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 24
+        && data.x is number && data.x >= -80 && data.x <= 80
+        && data.y is number && data.y >= -5 && data.y <= 60
+        && data.z is number && data.z >= -80 && data.z <= 80
+        && data.yaw is number && data.yaw >= -100 && data.yaw <= 100
+        && data.pose in ['idle', 'walk', 'jump', 'levitate', 'levitate_walk']
+        && data.moveSpeed is number && data.moveSpeed >= 0 && data.moveSpeed <= 3
+        && data.equippedAuraId is string && data.equippedAuraId.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
     match /rollPool/{auraId} {
       // Public non-PII game catalog readable on any device (including GitHub Pages)
       allow get: if isValidId(auraId);
@@ -91,6 +114,36 @@ service cloud.firestore {
         ]);
 
       allow delete: if isAdmin() && isValidId(auraId);
+    }
+
+    match /players/{sessionId} {
+      // Public non-PII world coordinates/pose/auraId so everyone in the shared server sees each other
+      allow get: if isValidId(sessionId);
+      allow list: if resource.data.sessionId is string
+        && resource.data.ownerUid is string
+        && resource.data.displayName is string;
+
+      allow create: if isVerified()
+        && isValidId(sessionId)
+        && isValidPlayerPresence(incoming(), sessionId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerified()
+        && isValidId(sessionId)
+        && isValidPlayerPresence(incoming(), sessionId)
+        && existing().ownerUid == request.auth.uid
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().sessionId == existing().sessionId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'x', 'y', 'z', 'yaw',
+          'pose', 'moveSpeed', 'equippedAuraId', 'updatedAt'
+        ]);
+
+      allow delete: if isValidId(sessionId)
+        && isVerified()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
     }
 
     match /admins/{userId} {

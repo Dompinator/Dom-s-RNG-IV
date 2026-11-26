@@ -89,6 +89,81 @@
         }
       },
       "required": ["uid", "createdAt"]
+    },
+    "PlayerPresence": {
+      "title": "PlayerPresence",
+      "description": "Public real-time position, animation pose, display name, and equipped aura ID of a player in the shared Baseplate server (contains zero PII).",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Per-tab session ID matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Verified Firebase Auth UID that owns this player session."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24,
+          "description": "Public in-game display name shown above the R6 character."
+        },
+        "x": {
+          "type": "number",
+          "description": "World X coordinate on the Baseplate."
+        },
+        "y": {
+          "type": "number",
+          "description": "World Y coordinate on the Baseplate."
+        },
+        "z": {
+          "type": "number",
+          "description": "World Z coordinate on the Baseplate."
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Character heading angle in radians."
+        },
+        "pose": {
+          "type": "string",
+          "enum": ["idle", "walk", "jump", "levitate", "levitate_walk"],
+          "description": "Current R6 animation pose."
+        },
+        "moveSpeed": {
+          "type": "number",
+          "description": "Normalized movement speed multiplier for walk/glide animation."
+        },
+        "equippedAuraId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "ID of the player's currently equipped Roll Pool aura, or empty string if none."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest movement or heartbeat update."
+        }
+      },
+      "required": [
+        "sessionId",
+        "ownerUid",
+        "displayName",
+        "x",
+        "y",
+        "z",
+        "yaw",
+        "pose",
+        "moveSpeed",
+        "equippedAuraId",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -103,6 +178,12 @@
         "$ref": "#/entities/AdminUser"
       },
       "description": "Trusted admin role documents."
+    },
+    "/players/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/PlayerPresence"
+      },
+      "description": "Shared-server multiplayer presence and transform state for online players on the Baseplate."
     }
   }
 }

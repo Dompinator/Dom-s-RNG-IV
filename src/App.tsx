@@ -816,6 +816,9 @@ export default function App() {
             storage={storage}
             equippedAuraId={equippedAuraId}
             totalRolls={totalRolls}
+            authUser={authUser}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
             onOpenStorage={() => setStorageOpen(true)}
             onOpenRegistry={() => setRegistryOpen(true)}
             onRecordRoll={handleRecordRoll}

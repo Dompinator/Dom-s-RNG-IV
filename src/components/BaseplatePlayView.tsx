@@ -1,11 +1,16 @@
 import {
   Archive,
   Check,
+  ChevronDown,
+  ChevronUp,
   Database,
   Dices,
+  LogIn,
+  LogOut,
   Music,
   RotateCcw,
   Sparkles,
+  Users,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -13,17 +18,32 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
 import { BaseplateWorldEngine } from '../engine/BaseplateWorldEngine';
+import type { User } from '../firebase';
 import {
   rollAuraFromCatalog,
   type CatalogAuraEntry,
   type StoredAuraEntry,
 } from '../game/gameRegistry';
+import {
+  getOrCreateSessionId,
+  loadSavedNickname,
+  publishPlayerState,
+  removePlayerPresence,
+  resolveDisplayName,
+  saveNickname,
+  subscribeToServerPlayers,
+  type LocalPlayerTransform,
+  type RemotePlayerState,
+} from '../game/multiplayerSync';
 
 interface BaseplatePlayViewProps {
   catalog: CatalogAuraEntry[];
   storage: StoredAuraEntry[];
   equippedAuraId: string | null;
   totalRolls: number;
+  authUser: User | null;
+  onSignIn: () => void;
+  onSignOut: () => void;
   onOpenStorage: () => void;
   onOpenRegistry: () => void;
   onRecordRoll: (rolledProject: AuraProject) => void;
@@ -35,6 +55,9 @@ export function BaseplatePlayView({
   storage,
   equippedAuraId,
   totalRolls,
+  authUser,
+  onSignIn,
+  onSignOut,
   onOpenStorage,
   onOpenRegistry,
   onRecordRoll,
@@ -43,11 +66,29 @@ export function BaseplatePlayView({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<BaseplateWorldEngine | null>(null);
 
+  const sessionId = useMemo(() => getOrCreateSessionId(), []);
+  const [customNick, setCustomNick] = useState<string>(() => loadSavedNickname());
+  const displayName = useMemo(
+    () => resolveDisplayName(authUser, customNick),
+    [authUser, customNick],
+  );
+  const displayNameRef = useRef(displayName);
+  displayNameRef.current = displayName;
+
   const [isRolling, setIsRolling] = useState(false);
   const [autoRoll, setAutoRoll] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [previewRollName, setPreviewRollName] = useState<string>('');
   const [rolledReveal, setRolledReveal] = useState<AuraProject | null>(null);
+
+  const [remotePlayers, setRemotePlayers] = useState<RemotePlayerState[]>([]);
+  const [audibleIds, setAudibleIds] = useState<Set<string>>(() => new Set());
+  const [playersPanelOpen, setPlayersPanelOpen] = useState(true);
+  const [localPosSnapshot, setLocalPosSnapshot] = useState<{ x: number; y: number; z: number }>({
+    x: 0,
+    y: 0,
+    z: 0,
+  });
 
   const catalogMap = useMemo(
     () => new Map(catalog.map((c) => [c.project.id, c.project])),
@@ -71,6 +112,7 @@ export function BaseplatePlayView({
 
     const engine = new BaseplateWorldEngine(container);
     engineRef.current = engine;
+    engine.setCatalog(catalog);
     engine.setEquippedAura(equippedAura);
 
     return () => {
@@ -80,6 +122,11 @@ export function BaseplatePlayView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep Roll Pool catalog synced inside 3D engine for remote players' equipped auras
+  useEffect(() => {
+    engineRef.current?.setCatalog(catalog);
+  }, [catalog]);
+
   // Sync live equipped aura onto walking R6 character
   useEffect(() => {
     engineRef.current?.setEquippedAura(equippedAura);
@@ -88,6 +135,98 @@ export function BaseplatePlayView({
   useEffect(() => {
     engineRef.current?.setAudioMuted(audioMuted);
   }, [audioMuted]);
+
+  // Real-time shared server player subscription (works for everyone, including spectators)
+  useEffect(() => {
+    const sub = subscribeToServerPlayers(sessionId, (players) => {
+      setRemotePlayers(players);
+      engineRef.current?.setRemotePlayers(players);
+    });
+
+    const pruneInterval = window.setInterval(() => {
+      const fresh = sub.getFreshRemotePlayers();
+      setRemotePlayers(fresh);
+      engineRef.current?.setRemotePlayers(fresh);
+      if (engineRef.current) {
+        setAudibleIds(new Set(engineRef.current.getAudibleRemoteSessionIds()));
+        const snap = engineRef.current.getLocalPlayerSnapshot();
+        setLocalPosSnapshot({ x: snap.x, y: snap.y, z: snap.z });
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(pruneInterval);
+      sub.unsubscribe();
+    };
+  }, [sessionId]);
+
+  // Publish verified player's live movement, pose, & equipped aura to Firestore shared server
+  useEffect(() => {
+    if (!authUser || !authUser.emailVerified) return;
+
+    const ownerUid = authUser.uid;
+    let disposed = false;
+    let inFlight = false;
+    let lastSent: (LocalPlayerTransform & { displayName: string; at: number }) | null = null;
+
+    const sendSnapshot = (force = false) => {
+      if (disposed || inFlight) return;
+      const engine = engineRef.current;
+      if (!engine) return;
+
+      const snap = engine.getLocalPlayerSnapshot();
+      const name = displayNameRef.current;
+      const now = Date.now();
+
+      if (!force && lastSent) {
+        const moved = Math.hypot(
+          snap.x - lastSent.x,
+          snap.y - lastSent.y,
+          snap.z - lastSent.z,
+        );
+        const yawDiff = Math.abs(snap.yaw - lastSent.yaw);
+        const changed =
+          moved > 0.06 ||
+          yawDiff > 0.05 ||
+          snap.pose !== lastSent.pose ||
+          snap.equippedAuraId !== lastSent.equippedAuraId ||
+          name !== lastSent.displayName;
+        const heartbeatDue = now - lastSent.at >= 12_000;
+        if (!changed && !heartbeatDue) return;
+      }
+
+      inFlight = true;
+      lastSent = { ...snap, displayName: name, at: now };
+      void publishPlayerState(sessionId, ownerUid, name, snap)
+        .catch(() => {
+          // Handled via Firestore error logger
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+
+    // Initial spawn publish
+    sendSnapshot(true);
+
+    const syncInterval = window.setInterval(() => {
+      sendSnapshot(false);
+    }, 120);
+
+    const onPageHide = () => {
+      void removePlayerPresence(sessionId);
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(syncInterval);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+      void removePlayerPresence(sessionId);
+    };
+  }, [authUser, sessionId]);
 
   const performRoll = () => {
     if (isRolling || enabledPool.length === 0) return;
@@ -125,6 +264,8 @@ export function BaseplatePlayView({
 
   const uniqueOwned = storage.length;
   const totalOwned = storage.reduce((sum, s) => sum + s.count, 0);
+  const isJoinedServer = Boolean(authUser && authUser.emailVerified);
+  const onlineCount = remotePlayers.length + (isJoinedServer ? 1 : 0);
 
   return (
     <div className="relative flex-1 w-full h-full bg-[#090c14] overflow-hidden select-none">
@@ -133,8 +274,28 @@ export function BaseplatePlayView({
 
       {/* Top-Left Player Status HUD */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 pointer-events-none">
-        <div className="pointer-events-auto bg-[#0f131d]/92 border border-white/[0.09] rounded-lg px-3.5 py-2.5 min-w-[230px]">
-          <div className="text-[11px] text-slate-400">Equipped Aura</div>
+        <div className="pointer-events-auto bg-[#0f131d]/92 border border-white/[0.09] rounded-lg px-3.5 py-2.5 min-w-[235px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-400">Equipped Aura</span>
+            <button
+              type="button"
+              onClick={() => setAudioMuted((m) => !m)}
+              title={audioMuted ? 'Unmute Spatial Aura Audio' : 'Mute Spatial Aura Audio'}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-[10px] text-slate-200 cursor-pointer"
+            >
+              {audioMuted ? (
+                <>
+                  <VolumeX className="w-3 h-3 text-slate-400" />
+                  <span>Muted</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-3 h-3 text-sky-400" />
+                  <span>Audio</span>
+                </>
+              )}
+            </button>
+          </div>
           {equippedAura ? (
             <div className="mt-0.5">
               <div className="text-sm font-semibold text-white">
@@ -154,23 +315,9 @@ export function BaseplatePlayView({
                 </span>
               </div>
               {equippedAura.audio && (
-                <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-sky-300">
-                  <span className="flex items-center gap-1 truncate">
-                    <Music className="w-3 h-3 shrink-0" />
-                    <span className="truncate">{equippedAura.audio.fileName}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setAudioMuted((m) => !m)}
-                    title={audioMuted ? 'Unmute Aura Audio' : 'Mute Aura Audio'}
-                    className="p-1 rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 cursor-pointer shrink-0"
-                  >
-                    {audioMuted ? (
-                      <VolumeX className="w-3 h-3 text-slate-400" />
-                    ) : (
-                      <Volume2 className="w-3 h-3 text-sky-400" />
-                    )}
-                  </button>
+                <div className="mt-1.5 flex items-center gap-1 text-[11px] text-sky-300 truncate">
+                  <Music className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{equippedAura.audio.fileName}</span>
                 </div>
               )}
             </div>
@@ -229,15 +376,146 @@ export function BaseplatePlayView({
         </div>
       </div>
 
-      {/* Top-Right Controls Help */}
-      <div className="hidden md:flex absolute top-4 right-4 z-10 items-center gap-2.5 bg-[#0f131d]/90 border border-white/[0.08] rounded-md px-3 py-1.5 text-xs text-slate-400">
-        <span>WASD / Arrows: Walk</span>
-        <span aria-hidden="true">·</span>
-        <span>Shift: Sprint</span>
-        <span aria-hidden="true">·</span>
-        <span>Space: Jump</span>
-        <span aria-hidden="true">·</span>
-        <span>Drag: Orbit</span>
+      {/* Top-Right Controls Help & Live Multiplayer Server Panel */}
+      <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="hidden md:flex items-center gap-2.5 bg-[#0f131d]/90 border border-white/[0.08] rounded-md px-3 py-1.5 text-xs text-slate-400">
+          <span>WASD / Arrows: Walk</span>
+          <span aria-hidden="true">·</span>
+          <span>Shift: Sprint</span>
+          <span aria-hidden="true">·</span>
+          <span>Space: Jump</span>
+          <span aria-hidden="true">·</span>
+          <span>Drag: Orbit</span>
+        </div>
+
+        <div className="pointer-events-auto w-64 max-w-[82vw] bg-[#0f131d]/92 border border-white/[0.09] rounded-lg overflow-hidden shadow-xl">
+          <button
+            type="button"
+            onClick={() => setPlayersPanelOpen((o) => !o)}
+            className="w-full px-3 py-2 flex items-center justify-between text-xs font-semibold text-slate-100 hover:bg-white/[0.04] cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <Users className="w-3.5 h-3.5 text-sky-400" />
+              <span>Shared Server</span>
+              <span className="font-mono-num text-[11px] text-slate-400">
+                ({onlineCount})
+              </span>
+            </span>
+            {playersPanelOpen ? (
+              <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            )}
+          </button>
+
+          {playersPanelOpen && (
+            <div className="px-3 pb-2.5 pt-1 border-t border-white/[0.07] space-y-2">
+              {isJoinedServer ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={customNick}
+                    maxLength={24}
+                    placeholder={displayName}
+                    onChange={(e) => {
+                      setCustomNick(e.target.value);
+                      saveNickname(e.target.value);
+                    }}
+                    title="Your public display name"
+                    className="flex-1 min-w-0 bg-black/40 border border-white/[0.1] rounded px-2 py-1 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500/60"
+                  />
+                  <button
+                    type="button"
+                    onClick={onSignOut}
+                    title="Leave multiplayer presence (Sign out)"
+                    className="p-1.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-300 cursor-pointer"
+                  >
+                    <LogOut className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onSignIn}
+                  className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-[11px] font-semibold text-sky-200 transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Join Server (Google)</span>
+                </button>
+              )}
+
+              <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
+                {isJoinedServer && (
+                  <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-white/[0.05] text-[11px]">
+                    <span className="truncate font-medium text-white">
+                      {displayName}{' '}
+                      <span className="text-slate-400 font-normal">(You)</span>
+                    </span>
+                    <span className="truncate max-w-[96px] text-[10px] text-amber-300">
+                      {equippedAura ? equippedAura.name : 'No Aura'}
+                    </span>
+                  </div>
+                )}
+
+                {remotePlayers.length === 0 ? (
+                  <div className="text-[11px] text-slate-500 py-1 text-center">
+                    {isJoinedServer
+                      ? 'Waiting for other players...'
+                      : 'No other players online right now.'}
+                  </div>
+                ) : (
+                  remotePlayers.map((p) => {
+                    const pAura = p.equippedAuraId
+                      ? catalogMap.get(p.equippedAuraId) ?? null
+                      : null;
+                    const dist = Math.round(
+                      Math.hypot(
+                        p.x - localPosSnapshot.x,
+                        p.y - localPosSnapshot.y,
+                        p.z - localPosSnapshot.z,
+                      ),
+                    );
+                    const inAudioRange = audibleIds.has(p.sessionId);
+
+                    return (
+                      <div
+                        key={p.sessionId}
+                        className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-white/[0.03] text-[11px]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1 text-slate-100 font-medium truncate">
+                            <span className="truncate">{p.displayName}</span>
+                            {inAudioRange && (
+                              <span
+                                title="Hearing this player's spatial aura audio"
+                                className="text-sky-400 shrink-0"
+                              >
+                                ♪
+                              </span>
+                            )}
+                          </div>
+                          {pAura && (
+                            <div
+                              className={`text-[10px] truncate ${
+                                RARITY_COLOR_STYLES[pAura.rarity.classification].text
+                              }`}
+                            >
+                              {pAura.name}
+                            </div>
+                          )}
+                        </div>
+                        <span className="font-mono-num text-[10px] text-slate-500 shrink-0">
+                          {dist}m
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Roll Result Reveal Card */}
@@ -316,13 +594,13 @@ export function BaseplatePlayView({
           <div className="text-xs text-slate-300">
             No rollable auras in the Roll Pool yet.
           </div>
-            <button
-              type="button"
-              onClick={onOpenRegistry}
-              className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-            >
-              Open Roll Pool Manager
-            </button>
+          <button
+            type="button"
+            onClick={onOpenRegistry}
+            className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+          >
+            Open Roll Pool Manager
+          </button>
         </div>
       )}
 

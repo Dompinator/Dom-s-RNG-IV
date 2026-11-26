@@ -4,8 +4,15 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { RARITY_COLOR_STYLES } from '../aura/rarity';
 import { createContactShadowTexture } from '../aura/textures';
 import type { AuraLayer, AuraProject } from '../aura/types';
+import type { CatalogAuraEntry } from '../game/gameRegistry';
+import type {
+  LocalPlayerTransform,
+  PlayerPose,
+  RemotePlayerState,
+} from '../game/multiplayerSync';
 import {
   buildLayerRuntime,
   getLayerStructuralSignature,
@@ -97,6 +104,102 @@ const _camForward = new THREE.Vector3();
 const _camRight = new THREE.Vector3();
 const _camGoal = new THREE.Vector3();
 const _lookTarget = new THREE.Vector3();
+const _listenerWorldPos = new THREE.Vector3();
+
+const RARITY_HEX_COLORS: Record<string, string> = {
+  Common: '#94a3b8',
+  Uncommon: '#34d399',
+  Rare: '#38bdf8',
+  Epic: '#c084fc',
+  Legendary: '#fbbf24',
+  Mythic: '#fb7185',
+};
+
+function createNameplateTexture(
+  displayName: string,
+  aura: AuraProject | null,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 144;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Rounded dark translucent backing card
+  const padX = 28;
+  const boxH = aura ? 112 : 68;
+  const boxY = aura ? 16 : 38;
+  const boxW = canvas.width - padX * 2;
+  const r = 22;
+
+  ctx.fillStyle = 'rgba(10, 14, 24, 0.78)';
+  ctx.beginPath();
+  ctx.moveTo(padX + r, boxY);
+  ctx.lineTo(padX + boxW - r, boxY);
+  ctx.quadraticCurveTo(padX + boxW, boxY, padX + boxW, boxY + r);
+  ctx.lineTo(padX + boxW, boxY + boxH - r);
+  ctx.quadraticCurveTo(padX + boxW, boxY + boxH, padX + boxW - r, boxY + boxH);
+  ctx.lineTo(padX + r, boxY + boxH);
+  ctx.quadraticCurveTo(padX, boxY + boxH, padX, boxY + boxH - r);
+  ctx.lineTo(padX, boxY + r);
+  ctx.quadraticCurveTo(padX, boxY, padX + r, boxY);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = aura
+    ? RARITY_HEX_COLORS[aura.rarity.classification] ?? 'rgba(255,255,255,0.22)'
+    : 'rgba(255, 255, 255, 0.16)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 36px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillText(
+    displayName.slice(0, 22),
+    canvas.width / 2,
+    aura ? boxY + 38 : boxY + boxH / 2,
+  );
+
+  if (aura) {
+    const colorHex =
+      RARITY_HEX_COLORS[aura.rarity.classification] ??
+      (RARITY_COLOR_STYLES[aura.rarity.classification] ? '#fbbf24' : '#cbd5e1');
+    ctx.font = '600 25px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.fillStyle = colorHex;
+    const prefix = aura.audio ? '♪ ' : '✦ ';
+    ctx.fillText(`${prefix}${aura.name.slice(0, 24)}`, canvas.width / 2, boxY + 80);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+interface RemotePlayerRuntime {
+  sessionId: string;
+  displayName: string;
+  equippedAuraId: string;
+  equippedAura: AuraProject | null;
+  rig: R6Rig;
+  contactShadow: THREE.Mesh;
+  shadowMat: THREE.MeshBasicMaterial;
+  nameplate: THREE.Sprite;
+  nameplateMat: THREE.SpriteMaterial;
+  nameplateTex: THREE.CanvasTexture;
+  nameplateSig: string;
+  runtimes: Map<string, CompiledLayerRuntime>;
+  spatialAudio: SpatialAuraAudioController;
+  currentPos: THREE.Vector3;
+  targetPos: THREE.Vector3;
+  currentYaw: number;
+  targetYaw: number;
+  targetPose: PlayerPose;
+  targetMoveSpeed: number;
+}
 
 export class BaseplateWorldEngine {
   private container: HTMLElement;
@@ -111,16 +214,25 @@ export class BaseplateWorldEngine {
 
   private runtimes = new Map<string, CompiledLayerRuntime>();
   private equippedAura: AuraProject | null = null;
+  private catalogMap = new Map<string, AuraProject>();
+  private remotePlayers = new Map<string, RemotePlayerRuntime>();
 
   private keyLight: THREE.DirectionalLight;
   private rimLight: THREE.SpotLight;
   private contactShadow: THREE.Mesh;
+  private shadowGeo: THREE.BufferGeometry;
+  private shadowTex: THREE.Texture;
 
   // Character kinematics
-  private playerPos = new THREE.Vector3(0, 0, 0);
+  private playerPos = (() => {
+    const a = Math.random() * Math.PI * 2;
+    return new THREE.Vector3(Math.cos(a) * 2.4, 0.13, Math.sin(a) * 2.4);
+  })();
   private playerVelY = 0;
   private playerYaw = 0;
   private isGrounded = true;
+  private currentPose: PlayerPose = 'idle';
+  private currentMoveSpeed = 1;
 
   // Third-person orbit camera state
   private camYaw = 0.45;
@@ -142,7 +254,10 @@ export class BaseplateWorldEngine {
   private resizeObserver: ResizeObserver;
   private envRT: THREE.WebGLRenderTarget;
   private worldDisposables: { dispose: () => void }[] = [];
+  private sharedListener: THREE.AudioListener;
+  private sharedAudioBuffers = new Map<string, AudioBuffer>();
   private spatialAudio: SpatialAuraAudioController;
+  private audioMuted = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -217,19 +332,19 @@ export class BaseplateWorldEngine {
     this.scene.add(this.rig.root);
 
     // Grounded Contact Shadow
-    const shadowTex = createContactShadowTexture();
-    const shadowGeo = new THREE.PlaneGeometry(1.85, 1.85);
-    shadowGeo.rotateX(-Math.PI / 2);
+    this.shadowTex = createContactShadowTexture();
+    this.shadowGeo = new THREE.PlaneGeometry(1.85, 1.85);
+    this.shadowGeo.rotateX(-Math.PI / 2);
     const shadowMat = new THREE.MeshBasicMaterial({
-      map: shadowTex,
+      map: this.shadowTex,
       transparent: true,
       depthWrite: false,
       opacity: 0.65,
     });
-    this.contactShadow = new THREE.Mesh(shadowGeo, shadowMat);
+    this.contactShadow = new THREE.Mesh(this.shadowGeo, shadowMat);
     this.contactShadow.position.y = 0.02;
     this.scene.add(this.contactShadow);
-    this.worldDisposables.push(shadowTex, shadowGeo, shadowMat);
+    this.worldDisposables.push(this.shadowTex, this.shadowGeo, shadowMat);
 
     // Bloom Postprocessing
     if (!this.isSoftwareGl) {
@@ -246,7 +361,12 @@ export class BaseplateWorldEngine {
       this.renderer.compile(this.scene, this.camera);
     }
 
-    this.spatialAudio = new SpatialAuraAudioController(this.camera);
+    this.sharedListener = new THREE.AudioListener();
+    this.camera.add(this.sharedListener);
+    this.spatialAudio = new SpatialAuraAudioController(this.camera, {
+      listener: this.sharedListener,
+      bufferCache: this.sharedAudioBuffers,
+    });
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
@@ -391,6 +511,13 @@ export class BaseplateWorldEngine {
     this.scene.add(mountains);
   }
 
+  private resumeAllAudioContexts() {
+    void this.spatialAudio.resumeContext();
+    for (const remote of this.remotePlayers.values()) {
+      void remote.spatialAudio.resumeContext();
+    }
+  }
+
   private onKeyDown = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
     if (
@@ -403,7 +530,7 @@ export class BaseplateWorldEngine {
     }
     const code = e.code;
     this.keys.add(code);
-    void this.spatialAudio.resumeContext();
+    this.resumeAllAudioContexts();
     if (code === 'Space' && this.isGrounded) {
       this.playerVelY = JUMP_VELOCITY;
       this.isGrounded = false;
@@ -415,7 +542,7 @@ export class BaseplateWorldEngine {
   };
 
   private onPointerDown = (e: PointerEvent) => {
-    void this.spatialAudio.resumeContext();
+    this.resumeAllAudioContexts();
     this.isDragging = true;
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
@@ -468,7 +595,8 @@ export class BaseplateWorldEngine {
   }
 
   public resetSpawn() {
-    this.playerPos.set(0, 0, 0);
+    const a = Math.random() * Math.PI * 2;
+    this.playerPos.set(Math.cos(a) * 2.4, 0.13, Math.sin(a) * 2.4);
     this.playerVelY = 0;
     this.isGrounded = true;
     this.playerYaw = 0;
@@ -492,27 +620,202 @@ export class BaseplateWorldEngine {
   }
 
   public setAudioMuted(muted: boolean) {
+    this.audioMuted = muted;
     this.spatialAudio.setMuted(muted);
+    for (const remote of this.remotePlayers.values()) {
+      remote.spatialAudio.setMuted(muted);
+    }
+  }
+
+  public getLocalPlayerSnapshot(): LocalPlayerTransform {
+    return {
+      x: this.playerPos.x,
+      y: this.playerPos.y,
+      z: this.playerPos.z,
+      yaw: this.playerYaw,
+      pose: this.currentPose,
+      moveSpeed: this.currentMoveSpeed,
+      equippedAuraId: this.equippedAura?.id ?? '',
+    };
+  }
+
+  public getAudibleRemoteSessionIds(): string[] {
+    const ids: string[] = [];
+    for (const [id, remote] of this.remotePlayers.entries()) {
+      if (remote.spatialAudio.isWithinRange()) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  public setCatalog(catalog: CatalogAuraEntry[]) {
+    this.catalogMap = new Map(catalog.map((c) => [c.project.id, c.project]));
+    for (const remote of this.remotePlayers.values()) {
+      this.syncRemoteAuraAndNameplate(remote, remote.displayName, remote.equippedAuraId);
+    }
+  }
+
+  public setRemotePlayers(players: RemotePlayerState[]) {
+    if (this.disposed) return;
+
+    const incomingIds = new Set(players.map((p) => p.sessionId));
+    for (const [id, remote] of this.remotePlayers.entries()) {
+      if (!incomingIds.has(id)) {
+        this.disposeRemotePlayer(remote);
+        this.remotePlayers.delete(id);
+      }
+    }
+
+    for (const p of players) {
+      const existing = this.remotePlayers.get(p.sessionId);
+      if (!existing) {
+        this.spawnRemotePlayer(p);
+      } else {
+        existing.targetPos.set(p.x, p.y, p.z);
+        existing.targetYaw = p.yaw;
+        existing.targetPose = p.pose;
+        existing.targetMoveSpeed = p.moveSpeed;
+        this.syncRemoteAuraAndNameplate(existing, p.displayName, p.equippedAuraId);
+      }
+    }
+  }
+
+  private spawnRemotePlayer(p: RemotePlayerState) {
+    const rig = createR6Character();
+    rig.root.position.set(p.x, p.y, p.z);
+    rig.root.rotation.y = p.yaw;
+    this.scene.add(rig.root);
+
+    const shadowMat = new THREE.MeshBasicMaterial({
+      map: this.shadowTex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.65,
+    });
+    const contactShadow = new THREE.Mesh(this.shadowGeo, shadowMat);
+    contactShadow.position.set(p.x, 0.02, p.z);
+    this.scene.add(contactShadow);
+
+    const aura = p.equippedAuraId ? this.catalogMap.get(p.equippedAuraId) ?? null : null;
+    const nameplateTex = createNameplateTexture(p.displayName, aura);
+    const nameplateMat = new THREE.SpriteMaterial({
+      map: nameplateTex,
+      transparent: true,
+      depthWrite: false,
+    });
+    const nameplate = new THREE.Sprite(nameplateMat);
+    nameplate.scale.set(2.45, 0.68, 1);
+    nameplate.position.set(p.x, p.y + 2.85, p.z);
+    this.scene.add(nameplate);
+
+    const spatialAudio = new SpatialAuraAudioController(this.camera, {
+      listener: this.sharedListener,
+      bufferCache: this.sharedAudioBuffers,
+    });
+    spatialAudio.setMuted(this.audioMuted);
+
+    const runtime: RemotePlayerRuntime = {
+      sessionId: p.sessionId,
+      displayName: p.displayName,
+      equippedAuraId: p.equippedAuraId,
+      equippedAura: aura,
+      rig,
+      contactShadow,
+      shadowMat,
+      nameplate,
+      nameplateMat,
+      nameplateTex,
+      nameplateSig: `${p.displayName}|${aura?.id ?? ''}|${aura?.name ?? ''}|${Boolean(aura?.audio)}`,
+      runtimes: new Map(),
+      spatialAudio,
+      currentPos: new THREE.Vector3(p.x, p.y, p.z),
+      targetPos: new THREE.Vector3(p.x, p.y, p.z),
+      currentYaw: p.yaw,
+      targetYaw: p.yaw,
+      targetPose: p.pose,
+      targetMoveSpeed: p.moveSpeed,
+    };
+
+    if (aura) {
+      this.syncLayersIntoMap(aura.layers, runtime.rig, runtime.runtimes);
+      spatialAudio.setAuraAudio(runtime.rig.anchors.root, aura.audio);
+    }
+
+    this.remotePlayers.set(p.sessionId, runtime);
+  }
+
+  private syncRemoteAuraAndNameplate(
+    remote: RemotePlayerRuntime,
+    displayName: string,
+    equippedAuraId: string,
+  ) {
+    const aura = equippedAuraId ? this.catalogMap.get(equippedAuraId) ?? null : null;
+    remote.displayName = displayName;
+    remote.equippedAuraId = equippedAuraId;
+    remote.equippedAura = aura;
+
+    if (aura) {
+      this.syncLayersIntoMap(aura.layers, remote.rig, remote.runtimes);
+      remote.spatialAudio.setAuraAudio(remote.rig.anchors.root, aura.audio);
+    } else {
+      this.syncLayersIntoMap([], remote.rig, remote.runtimes);
+      remote.spatialAudio.setAuraAudio(remote.rig.anchors.root, undefined);
+    }
+
+    const nextSig = `${displayName}|${aura?.id ?? ''}|${aura?.name ?? ''}|${Boolean(aura?.audio)}`;
+    if (nextSig !== remote.nameplateSig) {
+      const oldTex = remote.nameplateTex;
+      const nextTex = createNameplateTexture(displayName, aura);
+      remote.nameplateTex = nextTex;
+      remote.nameplateMat.map = nextTex;
+      remote.nameplateMat.needsUpdate = true;
+      remote.nameplateSig = nextSig;
+      oldTex.dispose();
+    }
+  }
+
+  private disposeRemotePlayer(remote: RemotePlayerRuntime) {
+    remote.spatialAudio.dispose();
+    for (const r of remote.runtimes.values()) {
+      r.dispose();
+    }
+    remote.runtimes.clear();
+    this.scene.remove(remote.rig.root);
+    remote.rig.dispose();
+    this.scene.remove(remote.contactShadow);
+    remote.shadowMat.dispose();
+    this.scene.remove(remote.nameplate);
+    remote.nameplateMat.dispose();
+    remote.nameplateTex.dispose();
   }
 
   private syncLayers(layers: AuraLayer[]) {
+    this.syncLayersIntoMap(layers, this.rig, this.runtimes);
+  }
+
+  private syncLayersIntoMap(
+    layers: AuraLayer[],
+    rig: R6Rig,
+    targetMap: Map<string, CompiledLayerRuntime>,
+  ) {
     const incomingIds = new Set(layers.map((l) => l.id));
-    for (const [id, runtime] of this.runtimes.entries()) {
+    for (const [id, runtime] of targetMap.entries()) {
       if (!incomingIds.has(id)) {
         runtime.dispose();
-        this.runtimes.delete(id);
+        targetMap.delete(id);
       }
     }
     for (const layer of layers) {
       const sig = getLayerStructuralSignature(layer);
-      const existing = this.runtimes.get(layer.id);
+      const existing = targetMap.get(layer.id);
       if (existing && existing.signature === sig) continue;
       if (existing) {
         existing.dispose();
-        this.runtimes.delete(layer.id);
+        targetMap.delete(layer.id);
       }
-      const created = buildLayerRuntime(layer, this.rig, this.maxAnisotropy);
-      this.runtimes.set(layer.id, created);
+      const created = buildLayerRuntime(layer, rig, this.maxAnisotropy);
+      targetMap.set(layer.id, created);
     }
   }
 
@@ -631,15 +934,17 @@ export class BaseplateWorldEngine {
     // 4. Update R6 Animation Pose (respecting aura levitate mode in-game)
     const isLevitate = Boolean(this.equippedAura?.levitate);
     if (!this.isGrounded) {
+      this.currentPose = 'jump';
+      this.currentMoveSpeed = 1;
       this.rig.update(this.elapsed, 'jump');
     } else if (isMoving) {
-      this.rig.update(
-        this.elapsed,
-        isLevitate ? 'levitate_walk' : 'walk',
-        sprinting ? 1.25 : 0.95,
-      );
+      this.currentPose = isLevitate ? 'levitate_walk' : 'walk';
+      this.currentMoveSpeed = sprinting ? 1.25 : 0.95;
+      this.rig.update(this.elapsed, this.currentPose, this.currentMoveSpeed);
     } else {
-      this.rig.update(this.elapsed, isLevitate ? 'levitate' : 'idle');
+      this.currentPose = isLevitate ? 'levitate' : 'idle';
+      this.currentMoveSpeed = 1;
+      this.rig.update(this.elapsed, this.currentPose);
     }
 
     // 5. Keep Shadows & Rim Light centered on player
@@ -662,8 +967,8 @@ export class BaseplateWorldEngine {
     );
 
     // 6. Update Equipped Aura Layers
+    const pixelRatio = this.renderer.getPixelRatio();
     if (this.equippedAura) {
-      const pixelRatio = this.renderer.getPixelRatio();
       for (const layer of this.equippedAura.layers) {
         const runtime = this.runtimes.get(layer.id);
         if (runtime) {
@@ -684,6 +989,56 @@ export class BaseplateWorldEngine {
 
     this.camera.position.lerp(_camGoal, Math.min(1, dt * 14));
     this.camera.lookAt(_lookTarget);
+    this.camera.updateMatrixWorld();
+    this.camera.getWorldPosition(_listenerWorldPos);
+
+    // Local player audio attenuation
+    this.spatialAudio.updateDistanceAttenuation(_listenerWorldPos);
+
+    // 8. Smoothly interpolate Remote Multiplayer Players, Auras, Nameplates, and Spatial Audio
+    const posAlpha = 1 - Math.exp(-12 * dt);
+    const yawAlpha = 1 - Math.exp(-14 * dt);
+    for (const remote of this.remotePlayers.values()) {
+      remote.currentPos.lerp(remote.targetPos, posAlpha);
+      let yawDiff = remote.targetYaw - remote.currentYaw;
+      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+      remote.currentYaw += yawDiff * yawAlpha;
+
+      remote.rig.root.position.copy(remote.currentPos);
+      remote.rig.root.rotation.y = remote.currentYaw;
+
+      const remoteGroundY =
+        Math.hypot(remote.currentPos.x, remote.currentPos.z) < 5.75 ? 0.13 : 0;
+      const remoteAir = Math.max(0, remote.currentPos.y - remoteGroundY);
+      const rShadowScale = Math.max(0.45, 1 - remoteAir * 0.12);
+      remote.contactShadow.position.set(
+        remote.currentPos.x,
+        remoteGroundY + 0.02,
+        remote.currentPos.z,
+      );
+      remote.contactShadow.scale.setScalar(rShadowScale);
+      remote.shadowMat.opacity = 0.65 * rShadowScale;
+
+      remote.rig.update(this.elapsed, remote.targetPose, remote.targetMoveSpeed);
+
+      remote.nameplate.position.set(
+        remote.currentPos.x,
+        remote.currentPos.y + remote.rig.bodyRoot.position.y + 2.85,
+        remote.currentPos.z,
+      );
+
+      if (remote.equippedAura) {
+        for (const layer of remote.equippedAura.layers) {
+          const rRuntime = remote.runtimes.get(layer.id);
+          if (rRuntime) {
+            rRuntime.update(dt, this.elapsed, layer, pixelRatio);
+          }
+        }
+      }
+
+      remote.spatialAudio.updateDistanceAttenuation(_listenerWorldPos);
+    }
 
     if (this.isSoftwareGl || !this.composer) {
       this.renderer.render(this.scene, this.camera);
@@ -708,7 +1063,15 @@ export class BaseplateWorldEngine {
     window.removeEventListener('pointerup', this.onPointerUp);
     dom.removeEventListener('wheel', this.onWheel);
 
+    for (const remote of this.remotePlayers.values()) {
+      this.disposeRemotePlayer(remote);
+    }
+    this.remotePlayers.clear();
+
     this.spatialAudio.dispose();
+    this.sharedAudioBuffers.clear();
+    this.camera.remove(this.sharedListener);
+    this.sharedListener.context.close().catch(() => {});
 
     for (const runtime of this.runtimes.values()) {
       runtime.dispose();
