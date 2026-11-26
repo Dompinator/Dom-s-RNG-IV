@@ -1,0 +1,108 @@
+{
+  "entities": {
+    "RollPoolAura": {
+      "title": "RollPoolAura",
+      "description": "A validated 3D aura configuration published into the shared cross-device Roll Pool.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique aura identifier matching the document ID."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Display name of the aura."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Short description of the aura."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the aura is currently active in the Roll Pool."
+        },
+        "baseOdds": {
+          "type": "number",
+          "description": "1-in-N base odds for rolling this aura."
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["Standard", "Epic", "Legendary", "Mythic"],
+          "description": "Automatically derived rarity classification."
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "UID of the creator who wrote this aura."
+        },
+        "project": {
+          "type": "object",
+          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the aura was added to Firestore."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the aura was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "enabled",
+        "baseOdds",
+        "classification",
+        "authorUid",
+        "project",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator record for Roll Pool management.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the admin."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the admin record was created."
+        }
+      },
+      "required": ["uid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/rollPool/{auraId}": {
+      "schema": {
+        "$ref": "#/entities/RollPoolAura"
+      },
+      "description": "Publicly readable Roll Pool of custom 3D auras managed by the creator."
+    },
+    "/admins/{userId}": {
+      "schema": {
+        "$ref": "#/entities/AdminUser"
+      },
+      "description": "Trusted admin role documents."
+    }
+  }
+}

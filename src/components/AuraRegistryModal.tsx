@@ -1,32 +1,32 @@
 import {
   ArchiveRestore,
   Brush,
-  CloudUpload,
+  Cloud,
   Download,
-  Globe,
+  LogIn,
+  LogOut,
   PlusCircle,
-  RefreshCw,
   RotateCcw,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { classifyBaseOdds, formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import { importAuraFromFile } from '../aura/storage';
 import type { AuraProject } from '../aura/types';
 import { validateAuraProject } from '../aura/validator';
 import type { CatalogAuraEntry } from '../game/gameRegistry';
-import {
-  downloadGlobalRollPoolJson,
-  getSavedGitHubToken,
-  publishRollPoolToGitHub,
-  saveGitHubToken,
-} from '../game/globalPoolSync';
+import { downloadGlobalRollPoolJson } from '../game/globalPoolSync';
 
 interface AuraRegistryModalProps {
   open: boolean;
   catalog: CatalogAuraEntry[];
+  userEmail: string | null;
+  isAdmin: boolean;
+  cloudConnected: boolean;
+  onSignIn: () => Promise<void>;
+  onSignOut: () => Promise<void>;
   onClose: () => void;
   onImportEntries: (projects: AuraProject[], warnings: string[]) => void;
   onUpdateEntry: (
@@ -42,7 +42,6 @@ interface AuraRegistryModalProps {
   onGrantToStorage: (auraId: string) => void;
   onOpenInStudio: (project: AuraProject) => void;
   onResetDefaults: () => void;
-  onSyncGlobalPool: () => Promise<void>;
   onNotify: (text: string, kind?: 'info' | 'error') => void;
 }
 
@@ -58,6 +57,11 @@ const QUICK_ODDS = [
 export function AuraRegistryModal({
   open,
   catalog,
+  userEmail,
+  isAdmin,
+  cloudConnected,
+  onSignIn,
+  onSignOut,
   onClose,
   onImportEntries,
   onUpdateEntry,
@@ -65,14 +69,9 @@ export function AuraRegistryModal({
   onGrantToStorage,
   onOpenInStudio,
   onResetDefaults,
-  onSyncGlobalPool,
   onNotify,
 }: AuraRegistryModalProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [showPublishBar, setShowPublishBar] = useState(false);
-  const [ghToken, setGhToken] = useState(() => getSavedGitHubToken());
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
 
   if (!open) return null;
 
@@ -123,34 +122,6 @@ export function AuraRegistryModal({
     }
   };
 
-  const handleSyncClick = async () => {
-    setIsSyncing(true);
-    try {
-      await onSyncGlobalPool();
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handlePublishGlobal = async () => {
-    setIsPublishing(true);
-    try {
-      saveGitHubToken(ghToken);
-      await publishRollPoolToGitHub(ghToken, catalog);
-      onNotify(
-        `Published ${catalog.length} aura${catalog.length === 1 ? '' : 's'} live to GitHub Pages for all devices.`,
-      );
-      setShowPublishBar(false);
-    } catch (err) {
-      onNotify(
-        err instanceof Error ? err.message : 'Failed to publish Roll Pool to GitHub Pages.',
-        'error',
-      );
-    } finally {
-      setIsPublishing(false);
-    }
-  };
-
   const sortedCatalog = [...catalog].sort(
     (a, b) => a.project.rarity.baseOdds - b.project.rarity.baseOdds,
   );
@@ -170,40 +141,27 @@ export function AuraRegistryModal({
               Roll Pool Manager
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              View, edit, open in Aura Studio, and publish your rollable auras to GitHub Pages for all devices.
+              View, open in Aura Studio, and edit all rollable auras. Changes sync live to all players across devices.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleSyncClick}
-              disabled={isSyncing}
-              title="Fetch latest published auras from GitHub Pages"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.04] hover:bg-white/[0.09] text-slate-200 border border-white/[0.07] transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>Sync Global</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowPublishBar((v) => !v)}
-              title="Publish Roll Pool live to GitHub Pages so everyone on any device can roll these auras"
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors cursor-pointer ${
-                showPublishBar
-                  ? 'bg-sky-500/20 border-sky-400/50 text-sky-200'
-                  : 'bg-white/[0.05] hover:bg-white/[0.1] text-sky-300 border-sky-500/30'
-              }`}
-            >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Publish to All Devices</span>
-            </button>
+            {catalog.length > 0 && (
+              <button
+                type="button"
+                onClick={() => downloadGlobalRollPoolJson(catalog)}
+                title="Download backup roll-pool.json"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.04] hover:bg-white/[0.09] text-slate-300 border border-white/[0.07] transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Backup JSON</span>
+              </button>
+            )}
 
             {catalog.length > 0 && (
               <button
                 type="button"
                 onClick={onResetDefaults}
-                title="Clear Local Roll Pool"
+                title="Clear Roll Pool"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.04] hover:bg-white/[0.09] text-slate-300 border border-white/[0.07] transition-colors cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -230,48 +188,53 @@ export function AuraRegistryModal({
           </div>
         </div>
 
-        {showPublishBar && (
-          <div className="mx-5 mt-4 p-4 rounded-lg bg-[#141a28] border border-sky-500/30 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div className="text-xs font-semibold text-white">
-                  Publish Roll Pool to GitHub Pages (All Devices)
-                </div>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Updates <span className="font-mono-num text-sky-300">roll-pool.json</span> on{' '}
-                  <span className="font-mono-num text-slate-300">Dompinator/Dom-s-RNG-IV</span> so visitors on any device immediately load and roll your auras.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => downloadGlobalRollPoolJson(catalog)}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 border border-white/[0.08] cursor-pointer"
-              >
-                <Download className="w-3 h-3" />
-                <span>Download roll-pool.json</span>
-              </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="password"
-                value={ghToken}
-                onChange={(e) => setGhToken(e.target.value)}
-                placeholder="GitHub Personal Access Token (stored locally in this browser only)"
-                className="flex-1 min-w-[240px] bg-[#0b0f18] border border-white/[0.1] focus:border-sky-400/70 rounded px-3 py-1.5 text-xs text-white outline-none"
-              />
-              <button
-                type="button"
-                onClick={handlePublishGlobal}
-                disabled={isPublishing || !ghToken.trim()}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition-colors cursor-pointer"
-              >
-                <CloudUpload className="w-3.5 h-3.5" />
-                <span>{isPublishing ? 'Publishing...' : `Publish Live (${catalog.length})`}</span>
-              </button>
-            </div>
+        {/* Automatic Live Cloud Sync Bar */}
+        <div className="mx-5 mt-4 px-4 py-2.5 rounded-lg bg-[#141a28] border border-white/[0.08] flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs">
+            <Cloud
+              className={`w-4 h-4 ${
+                isAdmin
+                  ? 'text-emerald-400'
+                  : cloudConnected
+                    ? 'text-sky-400'
+                    : 'text-slate-400'
+              }`}
+            />
+            {isAdmin ? (
+              <span className="text-slate-200">
+                Automatic Live Sync active ({userEmail}) — every edit here updates for all users immediately.
+              </span>
+            ) : userEmail ? (
+              <span className="text-slate-300">
+                Signed in as {userEmail} (read-only on global pool — local edits stay on this device).
+              </span>
+            ) : (
+              <span className="text-slate-300">
+                All live shared auras are loaded automatically. Sign in with the creator account to auto-sync changes to everyone.
+              </span>
+            )}
           </div>
-        )}
+
+          {userEmail ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onSignIn}
+              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign in with Google</span>
+            </button>
+          )}
+        </div>
 
         <input
           ref={fileInputRef}
@@ -293,7 +256,7 @@ export function AuraRegistryModal({
             handleFilesSelected(e.dataTransfer.files);
           }}
           onClick={() => fileInputRef.current?.click()}
-          className="mx-5 mt-4 p-3.5 border border-dashed border-white/[0.16] hover:border-amber-500/60 bg-[#141925] rounded-lg text-center cursor-pointer transition-colors"
+          className="mx-5 mt-3 p-3.5 border border-dashed border-white/[0.16] hover:border-amber-500/60 bg-[#141925] rounded-lg text-center cursor-pointer transition-colors"
         >
           <div className="text-xs font-medium text-slate-200">
             Drop exported <span className="font-mono-num text-amber-400">.aura.json</span>,{' '}
@@ -457,10 +420,10 @@ export function AuraRegistryModal({
                   <div className="flex items-center gap-3 text-[11px] text-slate-500">
                     <span>{p.layers.length} layers</span>
                     <span aria-hidden="true">·</span>
-                    <span className="capitalize">
+                    <span>
                       {entry.source === 'global'
-                        ? 'Global GitHub Pages Pool'
-                        : `Local (${entry.source})`}
+                        ? 'Shared Cloud Roll Pool'
+                        : `Local Draft (${entry.source})`}
                     </span>
                     {liveRarity.globalAnnouncement && (
                       <>
@@ -481,4 +444,5 @@ export function AuraRegistryModal({
     </div>
   );
 }
+
 

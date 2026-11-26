@@ -45,6 +45,21 @@ import {
   type StoredAuraEntry,
 } from './game/gameRegistry';
 import {
+  auth,
+  googleProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  type User,
+} from './firebase';
+import {
+  checkUserIsAdmin,
+  deleteRollPoolAura,
+  sanitizeAuraDocId,
+  subscribeToRollPool,
+  upsertRollPoolAura,
+} from './game/firestoreRollPool';
+import {
   fetchGlobalRollPool,
   mergeGlobalIntoCatalog,
 } from './game/globalPoolSync';
@@ -106,48 +121,114 @@ export default function App() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [registryOpen, setRegistryOpen] = useState(false);
 
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [cloudConnected, setCloudConnected] = useState(false);
+
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const updateTimersRef = useRef<Map<string, number>>(new Map());
+  const catalogRef = useRef<CatalogAuraEntry[]>(catalog);
+  catalogRef.current = catalog;
 
   const showToast = useCallback((text: string, kind: 'info' | 'error' = 'info') => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToast({ id: Date.now(), kind, text });
     toastTimerRef.current = window.setTimeout(() => {
       setToast(null);
-    }, 3600);
+    }, 4200);
   }, []);
 
-  // Load published cross-device Roll Pool on mount
+  // Track Google Auth & admin status
   useEffect(() => {
-    let active = true;
-    fetchGlobalRollPool().then((globalEntries) => {
-      if (!active || globalEntries.length === 0) return;
-      setCatalog((prev) => {
-        const merged = mergeGlobalIntoCatalog(prev, globalEntries);
-        saveCatalog(merged);
-        return merged;
-      });
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      setAuthUser(user);
+      if (user) {
+        const admin = await checkUserIsAdmin(user.uid, user.email, user.emailVerified);
+        setIsAdmin(admin);
+      } else {
+        setIsAdmin(false);
+      }
     });
-    return () => {
-      active = false;
-    };
+    return () => unsub();
   }, []);
 
-  const handleSyncGlobalPool = useCallback(async () => {
-    const globalEntries = await fetchGlobalRollPool();
-    if (globalEntries.length === 0) {
-      showToast('No published global auras found on GitHub Pages yet.');
-      return;
-    }
-    setCatalog((prev) => {
-      const merged = mergeGlobalIntoCatalog(prev, globalEntries);
-      saveCatalog(merged);
-      return merged;
-    });
-    showToast(
-      `Synced ${globalEntries.length} published aura${globalEntries.length === 1 ? '' : 's'} from GitHub Pages.`,
+  // Real-time Firestore Roll Pool subscription (automatically updates for ALL users on ALL devices)
+  useEffect(() => {
+    const unsub = subscribeToRollPool(
+      (cloudEntries) => {
+        setCloudConnected(true);
+        setCatalog((prev) => {
+          const cloudIds = new Set(cloudEntries.map((c) => c.project.id));
+          const localDrafts = prev.filter(
+            (c) => c.source !== 'global' && !cloudIds.has(c.project.id),
+          );
+          const merged = [...cloudEntries, ...localDrafts];
+          saveCatalog(merged);
+          return merged;
+        });
+      },
+      () => {
+        // Fallback to static roll-pool.json if offline or blocked
+        fetchGlobalRollPool().then((fallbackEntries) => {
+          if (fallbackEntries.length === 0) return;
+          setCatalog((prev) => {
+            const merged = mergeGlobalIntoCatalog(prev, fallbackEntries);
+            saveCatalog(merged);
+            return merged;
+          });
+        });
+      },
     );
+    return () => unsub();
+  }, []);
+
+  // When creator admin signs in, automatically push any local draft auras into Firestore
+  useEffect(() => {
+    if (!isAdmin || !authUser) return;
+    const localDrafts = catalogRef.current.filter((c) => c.source !== 'global');
+    if (localDrafts.length === 0) return;
+    Promise.all(
+      localDrafts.map((entry) => upsertRollPoolAura(entry, authUser.uid)),
+    )
+      .then(() => {
+        showToast(
+          `Synced ${localDrafts.length} local aura${localDrafts.length === 1 ? '' : 's'} to live cloud Roll Pool.`,
+        );
+      })
+      .catch(() => {
+        // Handled by Firestore error logger
+      });
+  }, [isAdmin, authUser, showToast]);
+
+  const handleSignIn = useCallback(async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      showToast('Signed in with Google.');
+    } catch (err: unknown) {
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === 'auth/popup-closed-by-user') return;
+      if (code === 'auth/unauthorized-domain') {
+        showToast(
+          `Add "${window.location.hostname}" to Firebase Console > Authentication > Authorized domains to sign in from this URL.`,
+          'error',
+        );
+        return;
+      }
+      showToast(
+        err instanceof Error ? err.message : 'Google sign-in failed.',
+        'error',
+      );
+    }
+  }, [showToast]);
+
+  const handleSignOut = useCallback(async () => {
+    await signOut(auth);
+    showToast('Signed out.');
   }, [showToast]);
 
   // Studio History & Edits
@@ -395,12 +476,20 @@ export default function App() {
     showToast('Removed project from local library.');
   };
 
-  // Publish Studio Aura directly into the Baseplate Roll Pool
+  // Send Studio Aura directly into the Roll Pool (auto-syncs to Firestore when signed in as creator)
   const handlePublishToRollPool = () => {
+    const safeId = sanitizeAuraDocId(project.id);
     const prepared: AuraProject = {
       ...JSON.parse(JSON.stringify(project)),
+      id: safeId,
       updatedAt: new Date().toISOString(),
       textures: collectUsedTextures(project.layers),
+    };
+    const nextEntry: CatalogAuraEntry = {
+      project: prepared,
+      enabled: true,
+      source: isAdmin ? 'global' : 'studio',
+      addedAt: new Date().toISOString(),
     };
 
     setCatalog((prev) => {
@@ -411,20 +500,30 @@ export default function App() {
           ...next[idx],
           project: prepared,
           enabled: true,
-          source: 'studio',
+          source: isAdmin ? 'global' : 'studio',
         };
       } else {
-        next.unshift({
-          project: prepared,
-          enabled: true,
-          source: 'studio',
-          addedAt: new Date().toISOString(),
-        });
+        next.unshift(nextEntry);
       }
       saveCatalog(next);
       return next;
     });
-    showToast(`"${prepared.name}" updated in Roll Pool (${prepared.rarity.classification}).`);
+
+    if (isAdmin && authUser) {
+      upsertRollPoolAura(nextEntry, authUser.uid)
+        .then(() => {
+          showToast(
+            `"${prepared.name}" synced live to all users (${prepared.rarity.classification}).`,
+          );
+        })
+        .catch(() => {
+          showToast('Saved locally; cloud sync encountered an error.', 'error');
+        });
+    } else {
+      showToast(
+        `"${prepared.name}" added to local Roll Pool. Sign in in Roll Pool Manager to sync to all users.`,
+      );
+    }
   };
 
   // Game Registry / Storage / Equip Handlers
@@ -492,34 +591,54 @@ export default function App() {
   const handleImportCatalogEntries = useCallback(
     (projects: AuraProject[], warnings: string[]) => {
       const now = new Date().toISOString();
+      const addedEntries: CatalogAuraEntry[] = [];
+
       setCatalog((prev) => {
         const next = [...prev];
         for (const proj of projects) {
+          const baseId = sanitizeAuraDocId(proj.id);
+          const uniqueId = next.some((c) => c.project.id === baseId)
+            ? `imp_${Math.random().toString(36).slice(2, 9)}`
+            : baseId;
           const safeProj: AuraProject = {
             ...proj,
-            id:
-              next.some((c) => c.project.id === proj.id)
-                ? `imp_${Math.random().toString(36).slice(2, 9)}`
-                : proj.id,
+            id: uniqueId,
             textures: collectUsedTextures(proj.layers),
           };
-          next.unshift({
+          const entry: CatalogAuraEntry = {
             project: safeProj,
             enabled: true,
-            source: 'imported',
+            source: isAdmin ? 'global' : 'imported',
             addedAt: now,
-          });
+          };
+          addedEntries.push(entry);
+          next.unshift(entry);
         }
         saveCatalog(next);
         return next;
       });
 
-      const warnText = warnings.length > 0 ? ` (${warnings[0]})` : '';
-      showToast(
-        `Added ${projects.length} exported aura${projects.length > 1 ? 's' : ''} to Roll Pool & Storage system${warnText}.`,
-      );
+      if (isAdmin && authUser) {
+        Promise.all(
+          addedEntries.map((entry) => upsertRollPoolAura(entry, authUser.uid)),
+        )
+          .then(() => {
+            const warnText = warnings.length > 0 ? ` (${warnings[0]})` : '';
+            showToast(
+              `Added ${projects.length} aura${projects.length > 1 ? 's' : ''} live to Roll Pool for all users${warnText}.`,
+            );
+          })
+          .catch(() => {
+            showToast('Imported locally; cloud sync failed.', 'error');
+          });
+      } else {
+        const warnText = warnings.length > 0 ? ` (${warnings[0]})` : '';
+        showToast(
+          `Added ${projects.length} aura${projects.length > 1 ? 's' : ''} locally${warnText}. Sign in to sync to all users.`,
+        );
+      }
     },
-    [showToast],
+    [isAdmin, authUser, showToast],
   );
 
   const handleUpdateCatalogEntry = useCallback(
@@ -532,6 +651,8 @@ export default function App() {
         enabled?: boolean;
       },
     ) => {
+      let updatedEntry: CatalogAuraEntry | null = null;
+
       setCatalog((prev) => {
         const next = prev.map((entry) => {
           if (entry.project.id !== auraId) return entry;
@@ -547,18 +668,30 @@ export default function App() {
                 ? classifyBaseOdds(patch.baseOdds)
                 : entry.project.rarity,
           };
-          return {
+          updatedEntry = {
             ...entry,
-            source: entry.source === 'global' ? 'studio' : entry.source,
+            source: isAdmin ? 'global' : entry.source === 'global' ? 'studio' : entry.source,
             enabled: patch.enabled !== undefined ? patch.enabled : entry.enabled,
             project: nextProject,
           };
+          return updatedEntry;
         });
         saveCatalog(next);
         return next;
       });
+
+      if (isAdmin && authUser && updatedEntry) {
+        const entrySnapshot = updatedEntry;
+        const existingTimer = updateTimersRef.current.get(auraId);
+        if (existingTimer) window.clearTimeout(existingTimer);
+        const timerId = window.setTimeout(() => {
+          updateTimersRef.current.delete(auraId);
+          void upsertRollPoolAura(entrySnapshot, authUser.uid);
+        }, 350);
+        updateTimersRef.current.set(auraId, timerId);
+      }
     },
-    [],
+    [isAdmin, authUser],
   );
 
   const handleDeleteCatalogEntry = useCallback(
@@ -577,9 +710,16 @@ export default function App() {
         setEquippedAuraId(null);
         saveEquippedAuraId(null);
       }
-      showToast('Removed aura from Roll Pool.');
+
+      if (isAdmin && authUser) {
+        void deleteRollPoolAura(auraId).then(() => {
+          showToast('Removed aura from live Roll Pool.');
+        });
+      } else {
+        showToast('Removed aura from local Roll Pool.');
+      }
     },
-    [equippedAuraId, showToast],
+    [equippedAuraId, isAdmin, authUser, showToast],
   );
 
   const handleGrantToStorage = useCallback(
@@ -593,13 +733,21 @@ export default function App() {
   );
 
   const handleResetCatalogDefaults = useCallback(() => {
+    const currentIds = catalogRef.current.map((c) => c.project.id);
     const empty = getDefaultCatalog();
     setCatalog(empty);
     saveCatalog(empty);
     setEquippedAuraId(null);
     saveEquippedAuraId(null);
-    showToast('Cleared all auras from Roll Pool.');
-  }, [showToast]);
+
+    if (isAdmin && authUser) {
+      void Promise.all(currentIds.map((id) => deleteRollPoolAura(id))).then(() => {
+        showToast('Cleared all auras from live Roll Pool.');
+      });
+    } else {
+      showToast('Cleared all local auras from Roll Pool.');
+    }
+  }, [isAdmin, authUser, showToast]);
 
   const handleOpenInStudio = useCallback((target: AuraProject) => {
     setProject(JSON.parse(JSON.stringify(target)));
@@ -718,6 +866,11 @@ export default function App() {
       <AuraRegistryModal
         open={registryOpen}
         catalog={catalog}
+        userEmail={authUser?.email ?? null}
+        isAdmin={isAdmin}
+        cloudConnected={cloudConnected}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
         onClose={() => setRegistryOpen(false)}
         onImportEntries={handleImportCatalogEntries}
         onUpdateEntry={handleUpdateCatalogEntry}
@@ -725,7 +878,6 @@ export default function App() {
         onGrantToStorage={handleGrantToStorage}
         onOpenInStudio={handleOpenInStudio}
         onResetDefaults={handleResetCatalogDefaults}
-        onSyncGlobalPool={handleSyncGlobalPool}
         onNotify={showToast}
       />
 
