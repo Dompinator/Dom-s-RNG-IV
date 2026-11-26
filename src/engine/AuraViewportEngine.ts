@@ -19,7 +19,10 @@ import {
   type CompiledLayerRuntime,
 } from './layerBuilder';
 import { createR6Character, type R6Rig } from './r6Character';
-import { SpatialAuraAudioController } from './spatialAudio';
+import {
+  SpatialAuraAudioController,
+  type SpatialAudioState,
+} from './spatialAudio';
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -49,6 +52,7 @@ const CAMERA_PRESETS: Record<
 export interface EngineCallbacks {
   onContextLost?: () => void;
   onContextRestored?: () => void;
+  onAudioStateChange?: (state: SpatialAudioState) => void;
 }
 
 export class AuraViewportEngine {
@@ -242,7 +246,9 @@ export class AuraViewportEngine {
       this.renderer.compile(this.scene, this.camera);
     }
 
-    this.spatialAudio = new SpatialAuraAudioController(this.camera);
+    this.spatialAudio = new SpatialAuraAudioController(this.camera, {
+      onStateChange: (s) => this.callbacks.onAudioStateChange?.(s),
+    });
     this.renderer.domElement.addEventListener('pointerdown', this.handleAudioUnlock);
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -291,6 +297,10 @@ export class AuraViewportEngine {
 
   public setAudioMuted(muted: boolean) {
     this.spatialAudio.setMuted(muted);
+  }
+
+  public unlockAudio() {
+    void this.spatialAudio.resumeContext();
   }
 
   private applyEnvironment(env: AuraEnvironment) {
@@ -468,6 +478,7 @@ export class AuraViewportEngine {
           runtime.update(simDt, this.elapsed, layer, pixelRatio);
         }
       }
+      this.spatialAudio.updateDistanceAttenuation(this.camera.position);
     }
 
     if (this.isSoftwareGl || !this.composer) {

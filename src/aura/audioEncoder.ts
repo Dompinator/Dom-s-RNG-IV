@@ -3,12 +3,52 @@ import type { AuraAudioConfig } from './types';
 const MAX_RAW_BYTES = 640 * 1024;
 const TARGET_WAV_BYTES = 620 * 1024;
 
-function readFileAsDataUrl(file: Blob): Promise<string> {
+function inferAudioMime(file: File): string {
+  if (file.type && file.type.startsWith('audio/')) {
+    return file.type.split(';')[0].trim();
+  }
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'wav':
+      return 'audio/wav';
+    case 'ogg':
+      return 'audio/ogg';
+    case 'm4a':
+    case 'aac':
+      return 'audio/mp4';
+    case 'flac':
+      return 'audio/flac';
+    case 'webm':
+      return 'audio/webm';
+    default:
+      return 'audio/mpeg';
+  }
+}
+
+function readBlobAsAudioDataUrl(blob: Blob, forcedMime?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onload = () => {
+      const raw = String(reader.result || '');
+      const commaIdx = raw.indexOf(',');
+      if (commaIdx < 0) {
+        reject(new Error('Failed to encode audio file.'));
+        return;
+      }
+      const b64 = raw.slice(commaIdx + 1);
+      if (forcedMime && !raw.startsWith('data:audio/')) {
+        resolve(`data:${forcedMime};base64,${b64}`);
+      } else {
+        // Strip any ";codecs=..." suffix so dataUrl strictly matches validator regex
+        const header = raw.slice(0, commaIdx);
+        const cleanMime = header.replace(/^data:([^;]+).*$/, '$1');
+        resolve(`data:${cleanMime};base64,${b64}`);
+      }
+    };
     reader.onerror = () => reject(new Error('Failed to read audio file.'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -61,6 +101,7 @@ export async function encodeAudioFileForAura(
 ): Promise<{ audio: AuraAudioConfig; optimizedNote?: string }> {
   const isAudio =
     file.type.startsWith('audio/') ||
+    file.type === 'video/webm' ||
     /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(file.name);
   if (!isAudio) {
     throw new Error('Please choose an audio file (.mp3, .wav, .ogg, .m4a, .webm).');
@@ -75,14 +116,15 @@ export async function encodeAudioFileForAura(
   };
 
   if (file.size <= MAX_RAW_BYTES) {
-    const dataUrl = await readFileAsDataUrl(file);
+    const mime = inferAudioMime(file);
+    const dataUrl = await readBlobAsAudioDataUrl(file, mime);
     if (!/^data:audio\/[a-zA-Z0-9.+_-]+;base64,/.test(dataUrl)) {
       throw new Error('Unsupported audio encoding format.');
     }
     return {
       audio: {
         fileName: file.name.slice(0, 96),
-        mimeType: file.type || 'audio/mpeg',
+        mimeType: mime,
         dataUrl,
         ...baseDefaults,
       },
@@ -91,7 +133,9 @@ export async function encodeAudioFileForAura(
 
   // Large files: decode and downsample cleanly into a compact cloud-syncable loop
   const arrayBuf = await file.arrayBuffer();
-  const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ctx = new AudioCtx();
   try {
     const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
@@ -111,7 +155,10 @@ export async function encodeAudioFileForAura(
     const channelData = rendered.getChannelData(0);
 
     // Smooth fade-in and fade-out tail so looped audio doesn't click
-    const fadeSamples = Math.min(Math.floor(targetSampleRate * 0.25), Math.floor(channelData.length / 6));
+    const fadeSamples = Math.min(
+      Math.floor(targetSampleRate * 0.25),
+      Math.floor(channelData.length / 6),
+    );
     for (let i = 0; i < fadeSamples; i++) {
       const gain = i / fadeSamples;
       channelData[i] *= gain;
@@ -119,7 +166,7 @@ export async function encodeAudioFileForAura(
     }
 
     const wavBlob = encodeMonoWav(channelData, targetSampleRate);
-    const dataUrl = await readFileAsDataUrl(wavBlob);
+    const dataUrl = await readBlobAsAudioDataUrl(wavBlob, 'audio/wav');
 
     return {
       audio: {

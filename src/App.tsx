@@ -125,6 +125,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -138,7 +139,7 @@ export default function App() {
     setToast({ id: Date.now(), kind, text });
     toastTimerRef.current = window.setTimeout(() => {
       setToast(null);
-    }, 4200);
+    }, 5200);
   }, []);
 
   // Track Google Auth & admin status
@@ -160,6 +161,7 @@ export default function App() {
     const unsub = subscribeToRollPool(
       (cloudEntries) => {
         setCloudConnected(true);
+        setCloudError(null);
         setCatalog((prev) => {
           const cloudIds = new Set(cloudEntries.map((c) => c.project.id));
           const localDrafts = prev.filter(
@@ -170,7 +172,8 @@ export default function App() {
           return merged;
         });
       },
-      () => {
+      (err) => {
+        setCloudError(err.message);
         // Fallback to static roll-pool.json if offline or blocked
         fetchGlobalRollPool().then((fallbackEntries) => {
           if (fallbackEntries.length === 0) return;
@@ -185,23 +188,43 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  const handleSyncLocalToCloud = useCallback(async () => {
+    if (!isAdmin || !authUser) {
+      showToast('Sign in with the creator Google account to sync to cloud.', 'error');
+      return;
+    }
+    const localDrafts = catalogRef.current.filter((c) => c.source !== 'global');
+    if (localDrafts.length === 0) return;
+    try {
+      await Promise.all(
+        localDrafts.map((entry) => upsertRollPoolAura(entry, authUser.uid)),
+      );
+      setCloudError(null);
+      setCatalog((prev) => {
+        const syncedIds = new Set(localDrafts.map((d) => d.project.id));
+        const next = prev.map((c) =>
+          syncedIds.has(c.project.id) ? { ...c, source: 'global' as const } : c,
+        );
+        saveCatalog(next);
+        return next;
+      });
+      showToast(
+        `Synced ${localDrafts.length} local aura${localDrafts.length === 1 ? '' : 's'} to live cloud Roll Pool.`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Cloud sync failed.';
+      setCloudError(msg);
+      showToast('Failed to sync local auras to Firestore. Check console/rules.', 'error');
+    }
+  }, [isAdmin, authUser, showToast]);
+
   // When creator admin signs in, automatically push any local draft auras into Firestore
   useEffect(() => {
     if (!isAdmin || !authUser) return;
     const localDrafts = catalogRef.current.filter((c) => c.source !== 'global');
     if (localDrafts.length === 0) return;
-    Promise.all(
-      localDrafts.map((entry) => upsertRollPoolAura(entry, authUser.uid)),
-    )
-      .then(() => {
-        showToast(
-          `Synced ${localDrafts.length} local aura${localDrafts.length === 1 ? '' : 's'} to live cloud Roll Pool.`,
-        );
-      })
-      .catch(() => {
-        // Handled by Firestore error logger
-      });
-  }, [isAdmin, authUser, showToast]);
+    void handleSyncLocalToCloud();
+  }, [isAdmin, authUser, handleSyncLocalToCloud]);
 
   const handleSignIn = useCallback(async () => {
     try {
@@ -214,16 +237,14 @@ export default function App() {
           : '';
       if (code === 'auth/popup-closed-by-user') return;
       if (code === 'auth/unauthorized-domain') {
-        showToast(
-          `Add "${window.location.hostname}" to Firebase Console > Authentication > Authorized domains to sign in from this URL.`,
-          'error',
-        );
+        const msg = `Add "${window.location.hostname}" to Firebase Console > Authentication > Authorized domains to sign in from this URL.`;
+        setCloudError(msg);
+        showToast(msg, 'error');
         return;
       }
-      showToast(
-        err instanceof Error ? err.message : 'Google sign-in failed.',
-        'error',
-      );
+      const errMsg = err instanceof Error ? err.message : 'Google sign-in failed.';
+      setCloudError(errMsg);
+      showToast(errMsg, 'error');
     }
   }, [showToast]);
 
@@ -706,12 +727,16 @@ export default function App() {
         if (existingTimer) window.clearTimeout(existingTimer);
         const timerId = window.setTimeout(() => {
           updateTimersRef.current.delete(auraId);
-          void upsertRollPoolAura(entrySnapshot, authUser.uid);
+          void upsertRollPoolAura(entrySnapshot, authUser.uid).catch((err) => {
+            const msg = err instanceof Error ? err.message : 'Cloud update failed.';
+            setCloudError(msg);
+            showToast('Failed to sync edit to cloud Roll Pool.', 'error');
+          });
         }, 350);
         updateTimersRef.current.set(auraId, timerId);
       }
     },
-    [isAdmin, authUser],
+    [isAdmin, authUser, showToast],
   );
 
   const handleDeleteCatalogEntry = useCallback(
@@ -896,6 +921,8 @@ export default function App() {
         userEmail={authUser?.email ?? null}
         isAdmin={isAdmin}
         cloudConnected={cloudConnected}
+        cloudError={cloudError}
+        onSyncLocalToCloud={handleSyncLocalToCloud}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
         onClose={() => setRegistryOpen(false)}

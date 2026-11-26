@@ -26,6 +26,8 @@ interface AuraRegistryModalProps {
   userEmail: string | null;
   isAdmin: boolean;
   cloudConnected: boolean;
+  cloudError: string | null;
+  onSyncLocalToCloud: () => Promise<void>;
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onClose: () => void;
@@ -61,6 +63,8 @@ export function AuraRegistryModal({
   userEmail,
   isAdmin,
   cloudConnected,
+  cloudError,
+  onSyncLocalToCloud,
   onSignIn,
   onSignOut,
   onClose,
@@ -75,6 +79,9 @@ export function AuraRegistryModal({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!open) return null;
+
+  const cloudCount = catalog.filter((c) => c.source === 'global').length;
+  const localCount = catalog.length - cloudCount;
 
   const handleFilesSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -190,50 +197,83 @@ export function AuraRegistryModal({
         </div>
 
         {/* Automatic Live Cloud Sync Bar */}
-        <div className="mx-5 mt-4 px-4 py-2.5 rounded-lg bg-[#141a28] border border-white/[0.08] flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs">
-            <Cloud
-              className={`w-4 h-4 ${
-                isAdmin
-                  ? 'text-emerald-400'
-                  : cloudConnected
-                    ? 'text-sky-400'
-                    : 'text-slate-400'
-              }`}
-            />
-            {isAdmin ? (
-              <span className="text-slate-200">
-                Automatic Live Sync active ({userEmail}) — every edit here updates for all users immediately.
-              </span>
-            ) : userEmail ? (
-              <span className="text-slate-300">
-                Signed in as {userEmail} (read-only on global pool — local edits stay on this device).
-              </span>
-            ) : (
-              <span className="text-slate-300">
-                All live shared auras are loaded automatically. Sign in with the creator account to auto-sync changes to everyone.
-              </span>
-            )}
+        <div className="mx-5 mt-4 px-4 py-2.5 rounded-lg bg-[#141a28] border border-white/[0.08] space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <Cloud
+                className={`w-4 h-4 shrink-0 ${
+                  isAdmin
+                    ? 'text-emerald-400'
+                    : cloudConnected
+                      ? 'text-sky-400'
+                      : 'text-slate-400'
+                }`}
+              />
+              {isAdmin ? (
+                <span className="text-slate-200">
+                  Cloud Sync active ({userEmail}) ·{' '}
+                  <strong className="text-emerald-300">{cloudCount} shared</strong>
+                  {localCount > 0 && (
+                    <span className="text-amber-300"> · {localCount} local pending</span>
+                  )}
+                </span>
+              ) : userEmail ? (
+                <span className="text-slate-300">
+                  Signed in as {userEmail} (read-only · {cloudCount} shared, {localCount} local).
+                </span>
+              ) : (
+                <span className="text-slate-300">
+                  {cloudConnected
+                    ? `Cloud connected (${cloudCount} shared auras${localCount > 0 ? `, ${localCount} local-only` : ''}). Sign in as creator to sync across sites/devices.`
+                    : 'Connecting to shared Cloud Roll Pool...'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {isAdmin && localCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void onSyncLocalToCloud()}
+                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-colors cursor-pointer"
+                >
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Sync {localCount} to Cloud</span>
+                </button>
+              )}
+
+              {userEmail ? (
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onSignIn}
+                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign in with Google</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          {userEmail ? (
-            <button
-              type="button"
-              onClick={onSignOut}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 transition-colors cursor-pointer"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Sign Out</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onSignIn}
-              className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors cursor-pointer"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-              <span>Sign in with Google</span>
-            </button>
+          {localCount > 0 && !isAdmin && (
+            <div className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-2.5 py-1.5">
+              {localCount} aura{localCount === 1 ? ' is' : 's are'} saved only in this browser&apos;s local storage and won&apos;t show up on other tabs/sites (e.g. Preview vs GitHub Pages) until you sign in as <span className="font-mono-num">codompic@gmail.com</span> here to upload them to Cloud.
+            </div>
+          )}
+
+          {cloudError && (
+            <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-2.5 py-1.5 break-words">
+              Cloud status: {cloudError}
+            </div>
           )}
         </div>
 

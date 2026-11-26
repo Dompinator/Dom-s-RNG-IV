@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
 import { BaseplateWorldEngine } from '../engine/BaseplateWorldEngine';
+import type { SpatialAudioState } from '../engine/spatialAudio';
 import type { User } from '../firebase';
 import {
   rollAuraFromCatalog,
@@ -78,6 +79,7 @@ export function BaseplatePlayView({
   const [isRolling, setIsRolling] = useState(false);
   const [autoRoll, setAutoRoll] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
+  const [audioState, setAudioState] = useState<SpatialAudioState>('none');
   const [previewRollName, setPreviewRollName] = useState<string>('');
   const [rolledReveal, setRolledReveal] = useState<AuraProject | null>(null);
 
@@ -110,7 +112,9 @@ export function BaseplatePlayView({
     const container = mountRef.current;
     if (!container) return;
 
-    const engine = new BaseplateWorldEngine(container);
+    const engine = new BaseplateWorldEngine(container, {
+      onAudioStateChange: (s) => setAudioState(s),
+    });
     engineRef.current = engine;
     engine.setCatalog(catalog);
     engine.setEquippedAura(equippedAura);
@@ -277,24 +281,42 @@ export function BaseplatePlayView({
         <div className="pointer-events-auto bg-[#0f131d]/92 border border-white/[0.09] rounded-lg px-3.5 py-2.5 min-w-[235px]">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-slate-400">Equipped Aura</span>
-            <button
-              type="button"
-              onClick={() => setAudioMuted((m) => !m)}
-              title={audioMuted ? 'Unmute Spatial Aura Audio' : 'Mute Spatial Aura Audio'}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-[10px] text-slate-200 cursor-pointer"
-            >
-              {audioMuted ? (
-                <>
-                  <VolumeX className="w-3 h-3 text-slate-400" />
-                  <span>Muted</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="w-3 h-3 text-sky-400" />
-                  <span>Audio</span>
-                </>
+            <div className="flex items-center gap-1">
+              {audioState === 'suspended' && (
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.unlockAudio()}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-400 text-[10px] font-semibold text-slate-950 cursor-pointer"
+                >
+                  <Volume2 className="w-3 h-3" />
+                  <span>Enable Audio</span>
+                </button>
               )}
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (audioState === 'suspended') {
+                    engineRef.current?.unlockAudio();
+                    return;
+                  }
+                  setAudioMuted((m) => !m);
+                }}
+                title={audioMuted ? 'Unmute Spatial Aura Audio' : 'Mute Spatial Aura Audio'}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.06] hover:bg-white/[0.12] text-[10px] text-slate-200 cursor-pointer"
+              >
+                {audioMuted ? (
+                  <>
+                    <VolumeX className="w-3 h-3 text-slate-400" />
+                    <span>Muted</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="w-3 h-3 text-sky-400" />
+                    <span>{audioState === 'error' ? 'Error' : 'Audio'}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
           {equippedAura ? (
             <div className="mt-0.5">

@@ -28,7 +28,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isVerified() && (
-        request.auth.token.email == 'codompic@gmail.com' ||
+        request.auth.token.email.lower() == 'codompic@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }

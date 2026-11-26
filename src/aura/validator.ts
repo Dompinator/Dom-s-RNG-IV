@@ -165,7 +165,9 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     const isSafeAudioUrl =
       rawUrl.length > 0 &&
       rawUrl.length <= 920_000 &&
-      /^data:audio\/[a-zA-Z0-9.+_-]+;base64,[A-Za-z0-9+/=]+$/.test(rawUrl);
+      /^data:audio\/[a-zA-Z0-9.+_-]+(?:;[a-zA-Z0-9.=_-]+)*;base64,[A-Za-z0-9+/=]+$/.test(
+        rawUrl,
+      );
 
     if (isSafeAudioUrl) {
       audio = {

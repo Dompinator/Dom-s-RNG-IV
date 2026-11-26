@@ -1,12 +1,36 @@
 import * as THREE from 'three';
 import type { AuraAudioConfig } from '../aura/types';
 
+export type SpatialAudioState =
+  | 'none'
+  | 'loading'
+  | 'suspended'
+  | 'playing'
+  | 'muted'
+  | 'error';
+
 export interface SpatialAudioOptions {
   listener?: THREE.AudioListener;
   bufferCache?: Map<string, AudioBuffer>;
+  onStateChange?: (state: SpatialAudioState) => void;
 }
 
 const _anchorWorldPos = new THREE.Vector3();
+
+function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
+  const commaIdx = dataUrl.indexOf(',');
+  if (commaIdx < 0) {
+    throw new Error('Invalid audio data URL.');
+  }
+  const base64 = dataUrl.slice(commaIdx + 1).replace(/\s+/g, '');
+  const binary = window.atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
 
 /**
  * Spatial 3D audio controller attached directly to an aura's 3D world anchor.
@@ -20,6 +44,7 @@ export class SpatialAuraAudioController {
   private ownsListener: boolean;
   private sharedBufferCache: Map<string, AudioBuffer>;
   private ownsBufferCache: boolean;
+  private onStateChange?: (state: SpatialAudioState) => void;
   private positionalAudio: THREE.PositionalAudio | null = null;
   private currentAnchor: THREE.Object3D | null = null;
   private currentDataUrl: string | null = null;
@@ -27,10 +52,13 @@ export class SpatialAuraAudioController {
   private loadSeq = 0;
   private muted = false;
   private distanceFactor = 1;
+  private audioState: SpatialAudioState = 'none';
+  private unlockListenersBound = false;
   private disposed = false;
 
   constructor(camera: THREE.Camera, options?: SpatialAudioOptions) {
     this.camera = camera;
+    this.onStateChange = options?.onStateChange;
     if (options?.listener) {
       this.listener = options.listener;
       this.ownsListener = false;
@@ -47,6 +75,16 @@ export class SpatialAuraAudioController {
     }
   }
 
+  private emitState(next: SpatialAudioState) {
+    if (this.audioState === next) return;
+    this.audioState = next;
+    this.onStateChange?.(next);
+  }
+
+  public getAudioState(): SpatialAudioState {
+    return this.audioState;
+  }
+
   private ensureListener(): THREE.AudioListener {
     if (!this.listener) {
       this.listener = new THREE.AudioListener();
@@ -56,30 +94,62 @@ export class SpatialAuraAudioController {
     return this.listener;
   }
 
+  private handleGlobalUnlock = () => {
+    void this.resumeContext();
+  };
+
+  private bindUnlockListeners() {
+    if (this.unlockListenersBound || this.disposed) return;
+    this.unlockListenersBound = true;
+    window.addEventListener('pointerdown', this.handleGlobalUnlock, { capture: true });
+    window.addEventListener('keydown', this.handleGlobalUnlock, { capture: true });
+    window.addEventListener('touchstart', this.handleGlobalUnlock, {
+      capture: true,
+      passive: true,
+    });
+  }
+
+  private unbindUnlockListeners() {
+    if (!this.unlockListenersBound) return;
+    this.unlockListenersBound = false;
+    window.removeEventListener('pointerdown', this.handleGlobalUnlock, { capture: true });
+    window.removeEventListener('keydown', this.handleGlobalUnlock, { capture: true });
+    window.removeEventListener('touchstart', this.handleGlobalUnlock, { capture: true });
+  }
+
   public async resumeContext(): Promise<void> {
-    if (!this.listener) return;
+    if (this.disposed || !this.listener) return;
     const ctx = this.listener.context;
     if (ctx.state === 'suspended') {
       try {
         await ctx.resume();
       } catch {
-        // Ignore until user gesture
+        // Browser still requires an active user gesture
       }
     }
-    if (
-      this.positionalAudio &&
-      this.positionalAudio.buffer &&
-      !this.positionalAudio.isPlaying &&
-      !this.muted &&
-      this.distanceFactor > 0.001 &&
-      this.currentConfig
-    ) {
+    this.tryPlayIfReady();
+  }
+
+  private tryPlayIfReady() {
+    if (this.disposed || !this.positionalAudio || !this.currentConfig) return;
+    const sound = this.positionalAudio;
+    if (!sound.buffer) return;
+
+    if (sound.context.state !== 'running') {
+      this.bindUnlockListeners();
+      this.emitState(this.muted ? 'muted' : 'suspended');
+      return;
+    }
+
+    this.unbindUnlockListeners();
+    if (!sound.isPlaying && !this.muted && this.distanceFactor > 0.001) {
       try {
-        this.positionalAudio.play();
+        sound.play();
       } catch {
-        // Ignore
+        // Ignore transient WebAudio error
       }
     }
+    this.emitState(this.muted ? 'muted' : sound.isPlaying ? 'playing' : 'suspended');
   }
 
   public setMuted(muted: boolean) {
@@ -88,6 +158,8 @@ export class SpatialAuraAudioController {
       this.applyEffectiveVolume();
       if (!muted) {
         void this.resumeContext();
+      } else {
+        this.emitState('muted');
       }
     }
   }
@@ -110,6 +182,7 @@ export class SpatialAuraAudioController {
       this.stopAndDetach();
       this.currentConfig = null;
       this.currentDataUrl = null;
+      this.emitState('none');
       return;
     }
 
@@ -123,8 +196,12 @@ export class SpatialAuraAudioController {
       this.currentAnchor === anchor
     ) {
       this.applyParams(this.positionalAudio, config);
-      if (!this.positionalAudio.isPlaying && this.positionalAudio.buffer) {
-        void this.resumeContext();
+      if (this.positionalAudio.buffer) {
+        if (this.positionalAudio.isPlaying && !this.muted) {
+          this.emitState('playing');
+        } else {
+          void this.resumeContext();
+        }
       }
       return;
     }
@@ -132,6 +209,7 @@ export class SpatialAuraAudioController {
     this.stopAndDetach();
     this.currentAnchor = anchor;
     this.currentDataUrl = config.dataUrl;
+    this.emitState('loading');
 
     const sound = new THREE.PositionalAudio(listener);
     sound.setDirectionalCone(360, 360, 1);
@@ -151,9 +229,16 @@ export class SpatialAuraAudioController {
     }
 
     const seq = ++this.loadSeq;
-    void fetch(config.dataUrl)
-      .then((res) => res.arrayBuffer())
-      .then((buf) => listener.context.decodeAudioData(buf))
+    let arrayBuf: ArrayBuffer;
+    try {
+      arrayBuf = dataUrlToArrayBuffer(config.dataUrl);
+    } catch {
+      this.emitState('error');
+      return;
+    }
+
+    void listener.context
+      .decodeAudioData(arrayBuf)
       .then((audioBuffer) => {
         if (this.disposed || seq !== this.loadSeq || this.positionalAudio !== sound) {
           return;
@@ -163,7 +248,9 @@ export class SpatialAuraAudioController {
         this.startPlaybackIfReady(sound);
       })
       .catch(() => {
-        // Ignore corrupt/cancelled decode
+        if (!this.disposed && seq === this.loadSeq) {
+          this.emitState('error');
+        }
       });
   }
 
@@ -172,43 +259,59 @@ export class SpatialAuraAudioController {
    * fade cleanly to true 0.0 beyond maxDistance while preserving HRTF panning
    * and inverse-distance falloff inside audible range.
    */
-  public updateDistanceAttenuation(listenerWorldPos: THREE.Vector3): void {
-    if (this.disposed || !this.currentConfig || !this.currentAnchor || !this.positionalAudio) {
+  public updateDistanceAttenuation(
+    originWorldPos: THREE.Vector3,
+    keepLocalFull = false,
+  ): void {
+    if (
+      this.disposed ||
+      !this.currentConfig ||
+      !this.currentAnchor ||
+      !this.positionalAudio
+    ) {
       return;
     }
 
-    this.currentAnchor.getWorldPosition(_anchorWorldPos);
-    const dist = listenerWorldPos.distanceTo(_anchorWorldPos);
-    const maxDist = Math.max(
-      this.currentConfig.refDistance + 1,
-      this.currentConfig.maxDistance,
-    );
-    const fadeStart = maxDist * 0.72;
-
-    if (dist >= maxDist) {
-      this.distanceFactor = 0;
-    } else if (dist <= fadeStart) {
+    if (keepLocalFull) {
       this.distanceFactor = 1;
     } else {
-      const t = (dist - fadeStart) / Math.max(0.001, maxDist - fadeStart);
-      // Smoothstep fade to 0 at maxDistance
-      this.distanceFactor = 1 - t * t * (3 - 2 * t);
+      this.currentAnchor.getWorldPosition(_anchorWorldPos);
+      const dist = originWorldPos.distanceTo(_anchorWorldPos);
+      const maxDist = Math.max(
+        this.currentConfig.refDistance + 1,
+        this.currentConfig.maxDistance,
+      );
+      const fadeStart = maxDist * 0.72;
+
+      if (dist >= maxDist) {
+        this.distanceFactor = 0;
+      } else if (dist <= fadeStart) {
+        this.distanceFactor = 1;
+      } else {
+        const t = (dist - fadeStart) / Math.max(0.001, maxDist - fadeStart);
+        // Smoothstep fade to 0 at maxDistance
+        this.distanceFactor = 1 - t * t * (3 - 2 * t);
+      }
     }
 
     this.applyEffectiveVolume();
 
-    // Resume playback if player walked into hearing range while audio context is running
     if (
       !this.muted &&
       this.distanceFactor > 0.01 &&
       this.positionalAudio.buffer &&
-      !this.positionalAudio.isPlaying &&
-      this.positionalAudio.context.state === 'running'
+      !this.positionalAudio.isPlaying
     ) {
-      try {
-        this.positionalAudio.play();
-      } catch {
-        // Ignore
+      if (this.positionalAudio.context.state === 'running') {
+        try {
+          this.positionalAudio.play();
+          this.emitState('playing');
+        } catch {
+          // Ignore
+        }
+      } else {
+        this.bindUnlockListeners();
+        this.emitState('suspended');
       }
     }
   }
@@ -233,21 +336,24 @@ export class SpatialAuraAudioController {
     if (this.disposed || !sound.buffer) return;
     const ctx = sound.context;
     if (ctx.state === 'suspended') {
+      this.bindUnlockListeners();
+      this.emitState(this.muted ? 'muted' : 'suspended');
       void ctx
         .resume()
         .then(() => {
-          if (!this.disposed && this.positionalAudio === sound && !sound.isPlaying) {
-            sound.play();
+          if (!this.disposed && this.positionalAudio === sound) {
+            this.tryPlayIfReady();
           }
         })
         .catch(() => {});
-    } else if (!sound.isPlaying) {
-      sound.play();
+    } else {
+      this.tryPlayIfReady();
     }
   }
 
   public stopAndDetach() {
     this.loadSeq++;
+    this.unbindUnlockListeners();
     if (this.positionalAudio) {
       try {
         if (this.positionalAudio.isPlaying) {

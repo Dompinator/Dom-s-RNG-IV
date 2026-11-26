@@ -19,7 +19,10 @@ import {
   type CompiledLayerRuntime,
 } from './layerBuilder';
 import { createR6Character, type R6Rig } from './r6Character';
-import { SpatialAuraAudioController } from './spatialAudio';
+import {
+  SpatialAuraAudioController,
+  type SpatialAudioState,
+} from './spatialAudio';
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -258,9 +261,14 @@ export class BaseplateWorldEngine {
   private sharedAudioBuffers = new Map<string, AudioBuffer>();
   private spatialAudio: SpatialAuraAudioController;
   private audioMuted = false;
+  private onAudioStateChange?: (state: SpatialAudioState) => void;
 
-  constructor(container: HTMLElement) {
+  constructor(
+    container: HTMLElement,
+    options?: { onAudioStateChange?: (state: SpatialAudioState) => void },
+  ) {
     this.container = container;
+    this.onAudioStateChange = options?.onAudioStateChange;
     this.isSoftwareGl = detectSoftwareWebGL();
 
     const width = Math.max(1, container.clientWidth);
@@ -366,6 +374,7 @@ export class BaseplateWorldEngine {
     this.spatialAudio = new SpatialAuraAudioController(this.camera, {
       listener: this.sharedListener,
       bufferCache: this.sharedAudioBuffers,
+      onStateChange: (s) => this.onAudioStateChange?.(s),
     });
     this.bindEvents();
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -612,7 +621,16 @@ export class BaseplateWorldEngine {
         this.bloomPass.threshold = aura.environment.bloomThreshold;
       }
       this.syncLayers(aura.layers);
-      this.spatialAudio.setAuraAudio(this.rig.anchors.root, aura.audio);
+      this.spatialAudio.setAuraAudio(
+        this.rig.anchors.root,
+        aura.audio
+          ? {
+              ...aura.audio,
+              refDistance: Math.max(20, aura.audio.refDistance),
+              maxDistance: Math.max(50, aura.audio.maxDistance),
+            }
+          : undefined,
+      );
     } else {
       this.syncLayers([]);
       this.spatialAudio.setAuraAudio(this.rig.anchors.root, undefined);
@@ -625,6 +643,10 @@ export class BaseplateWorldEngine {
     for (const remote of this.remotePlayers.values()) {
       remote.spatialAudio.setMuted(muted);
     }
+  }
+
+  public unlockAudio() {
+    this.resumeAllAudioContexts();
   }
 
   public getLocalPlayerSnapshot(): LocalPlayerTransform {
@@ -992,8 +1014,8 @@ export class BaseplateWorldEngine {
     this.camera.updateMatrixWorld();
     this.camera.getWorldPosition(_listenerWorldPos);
 
-    // Local player audio attenuation
-    this.spatialAudio.updateDistanceAttenuation(_listenerWorldPos);
+    // Keep local player's own equipped aura clearly audible regardless of camera zoom
+    this.spatialAudio.updateDistanceAttenuation(this.playerPos, true);
 
     // 8. Smoothly interpolate Remote Multiplayer Players, Auras, Nameplates, and Spatial Audio
     const posAlpha = 1 - Math.exp(-12 * dt);
@@ -1037,7 +1059,7 @@ export class BaseplateWorldEngine {
         }
       }
 
-      remote.spatialAudio.updateDistanceAttenuation(_listenerWorldPos);
+      remote.spatialAudio.updateDistanceAttenuation(this.playerPos, false);
     }
 
     if (this.isSoftwareGl || !this.composer) {

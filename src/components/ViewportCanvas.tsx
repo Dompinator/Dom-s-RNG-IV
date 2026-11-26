@@ -18,6 +18,7 @@ import type {
   CharacterPoseMode,
 } from '../aura/types';
 import { AuraViewportEngine } from '../engine/AuraViewportEngine';
+import type { SpatialAudioState } from '../engine/spatialAudio';
 
 interface ViewportCanvasProps {
   project: AuraProject;
@@ -60,6 +61,7 @@ export function ViewportCanvas({
   const [showStage, setShowStage] = useState(true);
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
+  const [audioState, setAudioState] = useState<SpatialAudioState>('none');
 
   // Initialize Three.js engine once on mount
   useEffect(() => {
@@ -69,6 +71,7 @@ export function ViewportCanvas({
     const engine = new AuraViewportEngine(container, {
       onContextLost: () => setContextLost(true),
       onContextRestored: () => setContextLost(false),
+      onAudioStateChange: (s) => setAudioState(s),
     });
     engineRef.current = engine;
     engine.setProject(project);
@@ -154,11 +157,33 @@ export function ViewportCanvas({
         </div>
 
         <div className="pointer-events-auto flex items-center gap-1.5">
+          {project.audio && audioState === 'suspended' && (
+            <button
+              type="button"
+              onClick={() => engineRef.current?.unlockAudio()}
+              className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors cursor-pointer shadow-lg"
+            >
+              <Volume2 className="w-3.5 h-3.5" />
+              <span>Enable Audio</span>
+            </button>
+          )}
           {project.audio && (
             <button
               type="button"
-              onClick={() => setAudioMuted((m) => !m)}
-              title={audioMuted ? 'Unmute Aura Song' : 'Mute Aura Song'}
+              onClick={() => {
+                if (audioState === 'suspended') {
+                  engineRef.current?.unlockAudio();
+                  return;
+                }
+                setAudioMuted((m) => !m);
+              }}
+              title={
+                audioState === 'error'
+                  ? 'Could not decode uploaded audio file'
+                  : audioMuted
+                    ? 'Unmute Aura Song'
+                    : 'Mute Aura Song'
+              }
               className="flex items-center gap-1.5 bg-[#0f131d]/90 hover:bg-[#181e2c] border border-white/[0.08] text-slate-200 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer"
             >
               {audioMuted ? (
@@ -167,7 +192,11 @@ export function ViewportCanvas({
                 <Volume2 className="w-3.5 h-3.5 text-sky-400" />
               )}
               <span className="hidden sm:inline whitespace-nowrap">
-                {audioMuted ? 'Muted' : 'Aura Audio'}
+                {audioState === 'error'
+                  ? 'Audio Error'
+                  : audioMuted
+                    ? 'Muted'
+                    : 'Aura Audio'}
               </span>
             </button>
           )}
