@@ -328,10 +328,26 @@ export function InspectorPanel({
             Effect Parameters
           </h4>
 
-          {t === 'particle_systems' && (
+          {[
+            'particle_systems',
+            'rotating_rings',
+            'orbiting_objects',
+            'lightning_effects',
+            'energy_ribbons',
+            'floating_sparks',
+            'light_beams',
+          ].includes(t) && (
             <div>
               <label className="block text-[11px] text-slate-400 mb-1">
-                Emission Volume
+                {t === 'particle_systems'
+                  ? 'Emission Volume'
+                  : t === 'orbiting_objects'
+                    ? 'Orbit Path Shape'
+                    : t === 'rotating_rings'
+                      ? 'Ring Arrangement'
+                      : t === 'light_beams'
+                        ? 'Beam Layout'
+                        : 'Effect Shape'}
               </label>
               <select
                 value={s.emissionShape}

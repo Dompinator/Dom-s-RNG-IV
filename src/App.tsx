@@ -551,10 +551,12 @@ export default function App() {
   );
 
   const handleResetCatalogDefaults = useCallback(() => {
-    const defaults = getDefaultCatalog();
-    setCatalog(defaults);
-    saveCatalog(defaults);
-    showToast('Restored starter roll pool auras.');
+    const empty = getDefaultCatalog();
+    setCatalog(empty);
+    saveCatalog(empty);
+    setEquippedAuraId(null);
+    saveEquippedAuraId(null);
+    showToast('Cleared all auras from Roll Pool.');
   }, [showToast]);
 
   const handleOpenInStudio = useCallback((target: AuraProject) => {

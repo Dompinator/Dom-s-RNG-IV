@@ -1,16 +1,10 @@
-import { createDefaultLayer, PRESET_AURAS } from '../aura/presets';
-import { classifyBaseOdds } from '../aura/rarity';
-import {
-  AURA_FORMAT_VERSION,
-  AURA_TARGET_ENGINE,
-  type AuraProject,
-} from '../aura/types';
+import type { AuraProject } from '../aura/types';
 import { validateAuraProject } from '../aura/validator';
 
 export interface CatalogAuraEntry {
   project: AuraProject;
   enabled: boolean;
-  source: 'starter' | 'studio' | 'imported';
+  source: 'studio' | 'imported';
   addedAt: string;
 }
 
@@ -28,141 +22,17 @@ export interface GameSaveState {
   totalRolls: number;
 }
 
-const CATALOG_KEY = 'doms_rng_iv_game_catalog_v1';
-const STORAGE_KEY = 'doms_rng_iv_game_storage_v1';
-const EQUIPPED_KEY = 'doms_rng_iv_game_equipped_v1';
-const STATS_KEY = 'doms_rng_iv_game_stats_v1';
-
-function buildStarterCommonAuras(): AuraProject[] {
-  const glimmerLayer = {
-    ...createDefaultLayer('floating_sparks', 'Soft Glimmer'),
-    color: '#e2e8f0',
-    secondaryColor: '#94a3b8',
-    settings: {
-      ...createDefaultLayer('floating_sparks').settings,
-      particleCount: 45,
-      size: 0.2,
-      radius: 1.4,
-      spread: 2.0,
-      intensity: 1.1,
-      opacity: 0.75,
-    },
-  };
-
-  const emberLayer = {
-    ...createDefaultLayer('particle_systems', 'Ember Motes'),
-    color: '#fb923c',
-    secondaryColor: '#f59e0b',
-    settings: {
-      ...createDefaultLayer('particle_systems').settings,
-      particleCount: 90,
-      emissionShape: 'cylinder' as const,
-      radius: 1.5,
-      spread: 2.2,
-      size: 0.25,
-      intensity: 1.35,
-    },
-  };
-
-  const frostRing = {
-    ...createDefaultLayer('rotating_rings', 'Frost Ring'),
-    color: '#67e8f9',
-    secondaryColor: '#a5f3fc',
-    settings: {
-      ...createDefaultLayer('rotating_rings').settings,
-      radius: 1.7,
-      thickness: 0.1,
-      arcCount: 1,
-    },
-  };
-
-  const frostSparks = {
-    ...createDefaultLayer('floating_sparks', 'Ice Flakes'),
-    color: '#a5f3fc',
-    secondaryColor: '#ffffff',
-    settings: {
-      ...createDefaultLayer('floating_sparks').settings,
-      particleCount: 85,
-      radius: 1.75,
-      spread: 2.5,
-    },
-  };
-
-  const now = new Date().toISOString();
-  return [
-    {
-      formatVersion: AURA_FORMAT_VERSION,
-      engine: AURA_TARGET_ENGINE,
-      id: 'starter_glimmer',
-      name: 'Glimmer',
-      description: 'Subtle silver motes drifting around the character.',
-      author: 'Dom\'s RNG IV',
-      updatedAt: now,
-      rarity: classifyBaseOdds(2),
-      environment: {
-        backgroundColor: '#090b10',
-        bloomStrength: 0.7,
-        bloomRadius: 0.45,
-        bloomThreshold: 0.68,
-        ambientRimColor: '#94a3b8',
-      },
-      layers: [glimmerLayer],
-      textures: [glimmerLayer.textureRef],
-    },
-    {
-      formatVersion: AURA_FORMAT_VERSION,
-      engine: AURA_TARGET_ENGINE,
-      id: 'starter_ember_wisp',
-      name: 'Ember Wisp',
-      description: 'Warm rising sparks and gentle cinders.',
-      author: 'Dom\'s RNG IV',
-      updatedAt: now,
-      rarity: classifyBaseOdds(16),
-      environment: {
-        backgroundColor: '#090b10',
-        bloomStrength: 0.75,
-        bloomRadius: 0.5,
-        bloomThreshold: 0.65,
-        ambientRimColor: '#f97316',
-      },
-      layers: [emberLayer],
-      textures: [emberLayer.textureRef],
-    },
-    {
-      formatVersion: AURA_FORMAT_VERSION,
-      engine: AURA_TARGET_ENGINE,
-      id: 'starter_frost_halo',
-      name: 'Frost Halo',
-      description: 'Crystalline rotating ice ring with drifting frost particles.',
-      author: 'Dom\'s RNG IV',
-      updatedAt: now,
-      rarity: classifyBaseOdds(1_500),
-      environment: {
-        backgroundColor: '#090b10',
-        bloomStrength: 0.75,
-        bloomRadius: 0.5,
-        bloomThreshold: 0.66,
-        ambientRimColor: '#67e8f9',
-      },
-      layers: [frostRing, frostSparks],
-      textures: [frostRing.textureRef, frostSparks.textureRef],
-    },
-  ];
-}
+const CATALOG_KEY = 'doms_rng_iv_game_catalog_v2';
+const STORAGE_KEY = 'doms_rng_iv_game_storage_v2';
+const EQUIPPED_KEY = 'doms_rng_iv_game_equipped_v2';
+const STATS_KEY = 'doms_rng_iv_game_stats_v2';
 
 export function getDefaultCatalog(): CatalogAuraEntry[] {
-  const starters = [...buildStarterCommonAuras(), ...PRESET_AURAS];
-  const now = new Date().toISOString();
-  return starters.map((project) => ({
-    project,
-    enabled: true,
-    source: 'starter',
-    addedAt: now,
-  }));
+  return [];
 }
 
 export function loadGameState(): GameSaveState {
-  let catalog: CatalogAuraEntry[] = [];
+  const catalog: CatalogAuraEntry[] = [];
   try {
     const raw = localStorage.getItem(CATALOG_KEY);
     if (raw) {
@@ -175,10 +45,7 @@ export function loadGameState(): GameSaveState {
               catalog.push({
                 project: val.project,
                 enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
-                source:
-                  item.source === 'studio' || item.source === 'imported'
-                    ? item.source
-                    : 'starter',
+                source: item.source === 'studio' ? 'studio' : 'imported',
                 addedAt:
                   typeof item.addedAt === 'string'
                     ? item.addedAt
@@ -190,12 +57,7 @@ export function loadGameState(): GameSaveState {
       }
     }
   } catch {
-    catalog = [];
-  }
-
-  if (catalog.length === 0) {
-    catalog = getDefaultCatalog();
-    saveCatalog(catalog);
+    // start with empty roll pool
   }
 
   let storage: StoredAuraEntry[] = [];
@@ -304,6 +166,5 @@ export function rollAuraFromCatalog(
     }
   }
 
-  // Fallback to the most common enabled aura
   return sortedRarestFirst[sortedRarestFirst.length - 1];
 }

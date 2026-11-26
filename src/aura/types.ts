@@ -65,6 +65,7 @@ export const EMISSION_SHAPES = [
 export type EmissionShape = (typeof EMISSION_SHAPES)[number];
 
 export const ORBITER_SHAPES = [
+  'sphere',
   'crystal',
   'octahedron',
   'icosahedron',

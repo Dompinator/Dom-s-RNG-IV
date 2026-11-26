@@ -84,6 +84,8 @@ function computeAnimModulation(elapsed: number, layer: AuraLayer): number {
 
 function createOrbiterGeometry(shape: OrbiterShape): THREE.BufferGeometry {
   switch (shape) {
+    case 'sphere':
+      return new THREE.SphereGeometry(0.28, 20, 16);
     case 'octahedron':
       return new THREE.OctahedronGeometry(0.35, 0);
     case 'icosahedron':
@@ -263,16 +265,25 @@ export function buildLayerRuntime(
         group.rotation.y += l.animation.rotationSpeed.y * spd * dt;
         group.rotation.x += l.animation.rotationSpeed.x * spd * dt * 0.35;
 
+        const isSphereCage = l.settings.emissionShape === 'sphere';
         subRings.forEach((sub, idx) => {
-          const factor = 1 - idx * 0.22;
+          const factor = isSphereCage ? 1 - idx * 0.06 : 1 - idx * 0.22;
           sub.scale.set(
             l.settings.radius * factor,
             1 + l.settings.thickness * 3.0,
             l.settings.radius * factor,
           );
-          sub.position.y = idx * 0.08 * l.settings.spread;
-          sub.rotation.y += (idx % 2 === 0 ? 1 : -1.4) * spd * dt * 0.6;
-          sub.rotation.z = idx * l.settings.tilt * 0.6;
+          if (isSphereCage) {
+            sub.position.y = 0;
+            sub.rotation.x = idx * (Math.PI / Math.max(2, subRings.length)) + l.settings.tilt;
+            sub.rotation.z = idx * 0.7;
+            sub.rotation.y += (idx % 2 === 0 ? 1 : -1.2) * spd * dt * 0.75;
+          } else {
+            sub.position.y = idx * 0.08 * l.settings.spread;
+            sub.rotation.x = 0;
+            sub.rotation.y += (idx % 2 === 0 ? 1 : -1.4) * spd * dt * 0.6;
+            sub.rotation.z = idx * l.settings.tilt * 0.6;
+          }
         });
 
         bandMat.uniforms.uTime.value = elapsed * Math.max(0.1, l.animation.speed);
@@ -350,17 +361,29 @@ export function buildLayerRuntime(
         mat.emissiveIntensity = l.settings.intensity * l.settings.glow * 0.9 * mod;
         mat.opacity = l.settings.opacity;
 
+        const isSphereOrbit = l.settings.emissionShape === 'sphere';
         for (let i = 0; i < count; i++) {
           const angle = phases[i] + t * l.animation.rotationSpeed.y;
           const r = l.settings.radius * radiiJitter[i];
-          const incl = inclinations[i] * l.settings.spread;
-          const yBob = Math.sin(angle * 2 + i) * 0.35 * l.settings.spread;
 
-          _dummy.position.set(
-            Math.cos(angle) * r,
-            yBob + Math.sin(angle) * incl * r,
-            Math.sin(angle) * r,
-          );
+          if (isSphereOrbit) {
+            const phi = Math.acos(1 - (2 * (i + 0.5)) / count);
+            const theta = angle + i * 2.39996;
+            _dummy.position.set(
+              Math.sin(phi) * Math.cos(theta) * r,
+              Math.cos(phi) * r,
+              Math.sin(phi) * Math.sin(theta) * r,
+            );
+          } else {
+            const incl = inclinations[i] * l.settings.spread;
+            const yBob = Math.sin(angle * 2 + i) * 0.35 * l.settings.spread;
+            _dummy.position.set(
+              Math.cos(angle) * r,
+              yBob + Math.sin(angle) * incl * r,
+              Math.sin(angle) * r,
+            );
+          }
+
           _dummy.rotation.set(
             t * l.animation.rotationSpeed.x + i,
             -angle + t * 0.5,
@@ -691,14 +714,32 @@ export function buildLayerRuntime(
       _colorA.set(l.color);
       _colorB.set(l.secondaryColor);
 
+      const isSphere = l.settings.emissionShape === 'sphere';
       for (let a = 0; a < arcCount; a++) {
-        const theta1 = Math.random() * Math.PI * 2;
-        const theta2 = theta1 + (Math.random() - 0.5) * 2.2;
-        const r1 = r * (0.35 + Math.random() * 0.65);
-        const r2 = r * (0.45 + Math.random() * 0.55);
+        if (isSphere) {
+          const th1 = Math.random() * Math.PI * 2;
+          const ph1 = Math.acos(2 * Math.random() - 1);
+          const th2 = th1 + (Math.random() - 0.5) * 2.0;
+          const ph2 = Math.max(0.1, Math.min(Math.PI - 0.1, ph1 + (Math.random() - 0.5) * 1.4));
+          _vecA.set(
+            Math.sin(ph1) * Math.cos(th1) * r,
+            Math.cos(ph1) * r,
+            Math.sin(ph1) * Math.sin(th1) * r,
+          );
+          _vecB.set(
+            Math.sin(ph2) * Math.cos(th2) * r,
+            Math.cos(ph2) * r,
+            Math.sin(ph2) * Math.sin(th2) * r,
+          );
+        } else {
+          const theta1 = Math.random() * Math.PI * 2;
+          const theta2 = theta1 + (Math.random() - 0.5) * 2.2;
+          const r1 = r * (0.35 + Math.random() * 0.65);
+          const r2 = r * (0.45 + Math.random() * 0.55);
 
-        _vecA.set(Math.cos(theta1) * r1, (Math.random() - 0.5) * spr, Math.sin(theta1) * r1);
-        _vecB.set(Math.cos(theta2) * r2, (Math.random() - 0.5) * spr, Math.sin(theta2) * r2);
+          _vecA.set(Math.cos(theta1) * r1, (Math.random() - 0.5) * spr, Math.sin(theta1) * r1);
+          _vecB.set(Math.cos(theta2) * r2, (Math.random() - 0.5) * spr, Math.sin(theta2) * r2);
+        }
 
         for (let s = 0; s <= segs; s++) {
           const t = s / segs;
@@ -855,30 +896,48 @@ export function buildLayerRuntime(
         const halfW = Math.max(0.02, l.settings.thickness);
         const turb = l.settings.turbulence;
 
+        const isSphereRibbon = l.settings.emissionShape === 'sphere';
         for (let rIdx = 0; rIdx < ribbonMeshes.length; rIdx++) {
           const item = ribbonMeshes[rIdx];
           const arr = item.posAttr.array as Float32Array;
           const phase = item.phaseOffset + t * 1.6;
+          const tiltAngle = (rIdx / Math.max(1, ribbonMeshes.length)) * Math.PI;
 
           for (let i = 0; i <= segs; i++) {
             const u = i / segs;
             const theta = phase + u * Math.PI * 3.2;
             const wave = Math.sin(u * Math.PI * 4 + t * 2.0 + rIdx) * 0.22 * turb;
-            const rr = radius * (0.75 + 0.25 * Math.sin(u * Math.PI)) + wave;
 
-            _vecA.set(
-              Math.cos(theta) * rr,
-              (u - 0.5) * spread + Math.cos(theta * 2 + t) * 0.25 * turb,
-              Math.sin(theta) * rr,
-            );
+            if (isSphereRibbon) {
+              const rr = radius + wave * 0.7;
+              const lat = Math.sin(theta * 0.5) * Math.cos(tiltAngle);
+              const x0 = Math.cos(theta) * rr;
+              const y0 = Math.sin(theta) * Math.sin(tiltAngle + 0.45) * rr + lat * 0.25 * rr;
+              const z0 = Math.sin(theta) * Math.cos(tiltAngle + 0.45) * rr;
+              _vecA.set(x0, y0, z0);
 
-            // Next sample for smooth tangent
-            const thetaNext = theta + 0.08;
-            _vecB.set(
-              Math.cos(thetaNext) * rr,
-              (u + 0.01 - 0.5) * spread + Math.cos(thetaNext * 2 + t) * 0.25 * turb,
-              Math.sin(thetaNext) * rr,
-            );
+              const thetaNext = theta + 0.08;
+              const latN = Math.sin(thetaNext * 0.5) * Math.cos(tiltAngle);
+              _vecB.set(
+                Math.cos(thetaNext) * rr,
+                Math.sin(thetaNext) * Math.sin(tiltAngle + 0.45) * rr + latN * 0.25 * rr,
+                Math.sin(thetaNext) * Math.cos(tiltAngle + 0.45) * rr,
+              );
+            } else {
+              const rr = radius * (0.75 + 0.25 * Math.sin(u * Math.PI)) + wave;
+              _vecA.set(
+                Math.cos(theta) * rr,
+                (u - 0.5) * spread + Math.cos(theta * 2 + t) * 0.25 * turb,
+                Math.sin(theta) * rr,
+              );
+
+              const thetaNext = theta + 0.08;
+              _vecB.set(
+                Math.cos(thetaNext) * rr,
+                (u + 0.01 - 0.5) * spread + Math.cos(thetaNext * 2 + t) * 0.25 * turb,
+                Math.sin(thetaNext) * rr,
+              );
+            }
 
             _tangent.subVectors(_vecB, _vecA).normalize();
             _side.crossVectors(_tangent, _vecA).normalize();
@@ -945,13 +1004,24 @@ export function buildLayerRuntime(
 
     const resetSpark = (i: number, l: AuraLayer, randAge = false) => {
       const a = Math.random() * Math.PI * 2;
-      const r = l.settings.radius * (0.2 + Math.random() * 0.8);
-      px[i] = Math.cos(a) * r;
-      py[i] = Math.random() * 0.3;
-      pz[i] = Math.sin(a) * r;
-      vx[i] = (Math.random() - 0.5) * 0.55;
-      vy[i] = (0.7 + Math.random() * 1.1) * Math.max(0.25, l.settings.spread * 0.45);
-      vz[i] = (Math.random() - 0.5) * 0.55;
+      if (l.settings.emissionShape === 'sphere') {
+        const phi = Math.acos(2 * Math.random() - 1);
+        const rr = l.settings.radius * (0.35 + Math.random() * 0.65);
+        px[i] = rr * Math.sin(phi) * Math.cos(a);
+        py[i] = rr * Math.cos(phi) + 1.0;
+        pz[i] = rr * Math.sin(phi) * Math.sin(a);
+        vx[i] = (px[i] / Math.max(0.1, rr)) * 0.85;
+        vy[i] = ((py[i] - 1.0) / Math.max(0.1, rr)) * 0.85 + 0.35;
+        vz[i] = (pz[i] / Math.max(0.1, rr)) * 0.85;
+      } else {
+        const r = l.settings.radius * (0.2 + Math.random() * 0.8);
+        px[i] = Math.cos(a) * r;
+        py[i] = Math.random() * 0.3;
+        pz[i] = Math.sin(a) * r;
+        vx[i] = (Math.random() - 0.5) * 0.55;
+        vy[i] = (0.7 + Math.random() * 1.1) * Math.max(0.25, l.settings.spread * 0.45);
+        vz[i] = (Math.random() - 0.5) * 0.55;
+      }
       life[i] = Math.max(0.2, l.settings.lifetime * (0.6 + Math.random() * 0.8));
       age[i] = randAge ? Math.random() * life[i] : 0;
       seed[i] = Math.random() * 100;
@@ -1181,8 +1251,20 @@ export function buildLayerRuntime(
       const height = Math.max(0.5, l.settings.spread);
       const tilt = l.settings.tilt;
 
+      const isSphereBeams = l.settings.emissionShape === 'sphere';
       beams.forEach((m, idx) => {
-        if (beamCount === 1) {
+        if (isSphereBeams) {
+          const phi = Math.acos(1 - (2 * (idx + 0.5)) / beamCount);
+          const theta = idx * 2.39996;
+          _vecA.set(
+            Math.sin(phi) * Math.cos(theta),
+            Math.cos(phi),
+            Math.sin(phi) * Math.sin(theta),
+          ).normalize();
+          m.position.set(0, 1.2, 0);
+          m.quaternion.setFromUnitVectors(_up, _vecA);
+          m.scale.set(r * 0.38, height * 0.75, r * 0.38);
+        } else if (beamCount === 1) {
           m.position.set(0, 0, 0);
           m.rotation.set(tilt, 0, 0);
           m.scale.set(r, height, r);

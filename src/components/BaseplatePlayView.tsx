@@ -282,6 +282,22 @@ export function BaseplatePlayView({
         </div>
       )}
 
+      {/* Empty Roll Pool Helper */}
+      {enabledPool.length === 0 && (
+        <div className="absolute bottom-22 left-1/2 -translate-x-1/2 z-10 bg-[#10141f]/95 border border-white/[0.12] rounded-lg px-4 py-2.5 text-center max-w-[90vw]">
+          <div className="text-xs text-slate-300">
+            No rollable auras in the Roll Pool yet.
+          </div>
+          <button
+            type="button"
+            onClick={onOpenRegistry}
+            className="mt-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+          >
+            Import Exported Auras in Aura Registry
+          </button>
+        </div>
+      )}
+
       {/* Bottom Center ROLL Action Bar */}
       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2.5">
         <button

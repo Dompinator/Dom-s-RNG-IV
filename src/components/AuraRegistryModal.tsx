@@ -102,15 +102,17 @@ export function AuraRegistryModal({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onResetDefaults}
-              title="Restore Starter Auras"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.04] hover:bg-white/[0.09] text-slate-300 border border-white/[0.07] transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Restore Starters</span>
-            </button>
+            {catalog.length > 0 && (
+              <button
+                type="button"
+                onClick={onResetDefaults}
+                title="Clear Roll Pool"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md bg-white/[0.04] hover:bg-white/[0.09] text-slate-300 border border-white/[0.07] transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Clear Pool</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -162,7 +164,20 @@ export function AuraRegistryModal({
 
         {/* Registry List */}
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {sortedCatalog.map((entry) => {
+          {sortedCatalog.length === 0 ? (
+            <div className="border border-dashed border-white/[0.1] rounded-lg p-8 text-center">
+              <p className="text-sm font-medium text-slate-200">
+                Your Roll Pool is empty
+              </p>
+              <p className="text-xs text-slate-400 mt-1.5 max-w-md mx-auto leading-relaxed">
+                Import exported <span className="font-mono-num text-amber-400">.aura.json</span> or{' '}
+                <span className="font-mono-num text-amber-400">.zip</span> aura packages above, or create an aura in{' '}
+                <strong className="text-slate-200">Aura Studio</strong> and click{' '}
+                <strong className="text-slate-200">Send to Roll Pool</strong>.
+              </p>
+            </div>
+          ) : (
+            sortedCatalog.map((entry) => {
             const p = entry.project;
             const liveRarity = classifyBaseOdds(p.rarity.baseOdds);
             const style = RARITY_COLOR_STYLES[liveRarity.classification];
@@ -307,7 +322,8 @@ export function AuraRegistryModal({
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
     </div>
