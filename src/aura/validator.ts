@@ -7,9 +7,11 @@ import {
   AURA_TARGET_ENGINE,
   BLEND_MODES,
   CUTSCENE_AUDIO_PRESETS,
+  CUTSCENE_FONT_STYLES,
   CUTSCENE_MOTIONS,
   CUTSCENE_PHASES,
   CUTSCENE_SHAPES,
+  CUTSCENE_TIER_META,
   CUTSCENE_TIERS,
   EFFECT_TYPES,
   EMISSION_SHAPES,
@@ -23,6 +25,7 @@ import {
   type AuraProject,
   type CutsceneCustomAudio,
   type CutsceneElement,
+  type CutsceneTier,
   type Vec3,
 } from './types';
 
@@ -81,7 +84,9 @@ function sanitizeCutsceneConfig(
 ): AuraCutsceneConfig | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const c = raw as Record<string, unknown>;
-  const tier = sanitizeEnum(c.tier, CUTSCENE_TIERS, 'legendary_mythic');
+  const rawTier = c.tier === 'legendary_mythic' ? 'epic' : c.tier;
+  const tier: CutsceneTier = sanitizeEnum(rawTier, CUTSCENE_TIERS, 'epic');
+  const tierMeta = CUTSCENE_TIER_META[tier];
   const rawElements = Array.isArray(c.elements) ? c.elements.slice(0, 24) : [];
   if (Array.isArray(c.elements) && c.elements.length > 24) {
     warnings.push('Cutscene element count capped at 24.');
@@ -92,6 +97,10 @@ function sanitizeCutsceneConfig(
     const item = rawElements[i];
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const el = item as Record<string, unknown>;
+    const cleanText =
+      typeof el.text === 'string'
+        ? el.text.replace(/[<>]/g, '').slice(0, 80)
+        : undefined;
     elements.push({
       id: sanitizeString(el.id, `cut_${i}_${Math.random().toString(36).slice(2, 6)}`, 48),
       name: sanitizeString(el.name, `Shape ${i + 1}`, 48),
@@ -109,6 +118,10 @@ function sanitizeCutsceneConfig(
       glow: clamp(el.glow, 0, 2.5, 1.4),
       count: Math.round(clamp(el.count, 1, 24, 6)),
       rotation: clamp(el.rotation, -180, 180, 0),
+      ...(cleanText !== undefined ? { text: cleanText } : {}),
+      ...(typeof el.fontStyle === 'string'
+        ? { fontStyle: sanitizeEnum(el.fontStyle, CUTSCENE_FONT_STYLES, 'display') }
+        : {}),
     });
   }
 
@@ -130,16 +143,27 @@ function sanitizeCutsceneConfig(
     }
   }
 
+  const headlineText =
+    typeof c.headlineText === 'string'
+      ? c.headlineText.replace(/[<>]/g, '').trim().slice(0, 80)
+      : '';
+
   return {
     enabled: typeof c.enabled === 'boolean' ? c.enabled : true,
     tier,
-    duration: clamp(c.duration, 1.0, 10.0, tier === 'epic' ? 2.5 : 5.6),
+    duration: clamp(c.duration, 1.0, 30.0, tierMeta.defaultDuration),
     primaryColor: sanitizeColor(c.primaryColor, '#fbbf24'),
     secondaryColor: sanitizeColor(c.secondaryColor, '#38bdf8'),
     backgroundColor: sanitizeColor(c.backgroundColor, '#020308'),
-    headlineText: sanitizeString(c.headlineText, '', 80),
-    shakeIntensity: clamp(c.shakeIntensity, 0, 2.5, tier === 'epic' ? 0.75 : 1.5),
-    flashIntensity: clamp(c.flashIntensity, 0, 2.5, tier === 'epic' ? 1.0 : 1.5),
+    headlineText,
+    showHeadlineText:
+      typeof c.showHeadlineText === 'boolean'
+        ? c.showHeadlineText
+        : headlineText.length > 0,
+    showRevealText:
+      typeof c.showRevealText === 'boolean' ? c.showRevealText : true,
+    shakeIntensity: clamp(c.shakeIntensity, 0, 2.5, tier === 'under_epic' ? 0.75 : 1.5),
+    flashIntensity: clamp(c.flashIntensity, 0, 2.5, tier === 'under_epic' ? 1.0 : 1.5),
     audioPreset: sanitizeEnum(c.audioPreset, CUTSCENE_AUDIO_PRESETS, 'cosmic_sub_drop'),
     audioVolume: clamp(c.audioVolume, 0, 1, 0.9),
     ...(customAudio ? { customAudio } : {}),

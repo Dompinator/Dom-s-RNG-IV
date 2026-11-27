@@ -48,8 +48,8 @@ service cloud.firestore {
         && (!('cutscene' in proj) || (
           proj.cutscene is map
           && proj.cutscene.enabled is bool
-          && proj.cutscene.tier in ['epic', 'legendary_mythic']
-          && proj.cutscene.duration is number && proj.cutscene.duration >= 1 && proj.cutscene.duration <= 10
+          && proj.cutscene.tier in ['under_epic', 'epic', 'legendary', 'mythic', 'legendary_mythic']
+          && proj.cutscene.duration is number && proj.cutscene.duration >= 1 && proj.cutscene.duration <= 30
           && proj.cutscene.headlineText is string && proj.cutscene.headlineText.size() <= 80
           && proj.cutscene.elements is list && proj.cutscene.elements.size() <= 24
           && (proj.cutscene.elements.size() == 0 || proj.cutscene.elements[0] is map)

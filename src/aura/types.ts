@@ -219,8 +219,43 @@ export const POSE_PRESET_META: Record<
   },
 };
 
-export const CUTSCENE_TIERS = ['epic', 'legendary_mythic'] as const;
+export const CUTSCENE_TIERS = [
+  'under_epic',
+  'epic',
+  'legendary',
+  'mythic',
+] as const;
 export type CutsceneTier = (typeof CUTSCENE_TIERS)[number];
+
+export const CUTSCENE_TIER_META: Record<
+  CutsceneTier,
+  { label: string; shortDesc: string; defaultDuration: number; climaxRatio: number }
+> = {
+  under_epic: {
+    label: '<Epic Cutscene',
+    shortDesc: 'Simple & short (~2.5s)',
+    defaultDuration: 2.5,
+    climaxRatio: 0.4,
+  },
+  epic: {
+    label: 'Epic Cutscene',
+    shortDesc: 'Multi-phase flash (~5.6s)',
+    defaultDuration: 5.6,
+    climaxRatio: 0.48,
+  },
+  legendary: {
+    label: 'Legendary Cutscene',
+    shortDesc: 'Grand 3-act sequence (~10.5s)',
+    defaultDuration: 10.5,
+    climaxRatio: 0.54,
+  },
+  mythic: {
+    label: 'Mythic Cutscene',
+    shortDesc: 'Colossal 20s cosmic event',
+    defaultDuration: 20.0,
+    climaxRatio: 0.68,
+  },
+};
 
 export const CUTSCENE_SHAPES = [
   'four_point_star',
@@ -235,6 +270,7 @@ export const CUTSCENE_SHAPES = [
   'spiral_vortex',
   'lightning_crack',
   'orb_core',
+  'custom_text',
 ] as const;
 export type CutsceneShapeType = (typeof CUTSCENE_SHAPES)[number];
 
@@ -251,6 +287,7 @@ export const CUTSCENE_SHAPE_LABELS: Record<CutsceneShapeType, string> = {
   spiral_vortex: 'Spiral Vortex',
   lightning_crack: 'Reality Fracture',
   orb_core: 'Singularity Core',
+  custom_text: 'On-Screen Text',
 };
 
 export const CUTSCENE_PHASES = ['all', 'buildup', 'climax', 'reveal'] as const;
@@ -264,8 +301,13 @@ export const CUTSCENE_MOTIONS = [
   'converge',
   'shatter',
   'flicker',
+  'slam',
+  'static',
 ] as const;
 export type CutsceneMotion = (typeof CUTSCENE_MOTIONS)[number];
+
+export const CUTSCENE_FONT_STYLES = ['display', 'serif', 'mono'] as const;
+export type CutsceneFontStyle = (typeof CUTSCENE_FONT_STYLES)[number];
 
 export const CUTSCENE_AUDIO_PRESETS = [
   'cosmic_sub_drop',
@@ -336,6 +378,8 @@ export interface CutsceneElement {
   glow: number; // 0 to 2.5
   count: number; // 1 to 24 (spokes/shards/arms)
   rotation: number; // -180 to 180 degrees
+  text?: string;
+  fontStyle?: CutsceneFontStyle;
 }
 
 export interface AuraCutsceneConfig {
@@ -346,6 +390,8 @@ export interface AuraCutsceneConfig {
   secondaryColor: string;
   backgroundColor: string;
   headlineText: string;
+  showHeadlineText?: boolean;
+  showRevealText?: boolean;
   shakeIntensity: number;
   flashIntensity: number;
   audioPreset: CutsceneAudioPreset;

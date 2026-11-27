@@ -1,9 +1,11 @@
 import { formatOdds } from '../aura/rarity';
-import type {
-  AuraCutsceneConfig,
-  AuraProject,
-  CutsceneElement,
-  CutsceneShapeType,
+import {
+  CUTSCENE_TIER_META,
+  type AuraCutsceneConfig,
+  type AuraProject,
+  type CutsceneElement,
+  type CutsceneShapeType,
+  type CutsceneTier,
 } from '../aura/types';
 
 function clamp01(v: number): number {
@@ -33,7 +35,6 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${clamp01(alpha)})`;
 }
 
-// Deterministic pseudo-random helper per element/index
 function seeded(n: number): number {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453123;
   return s - Math.floor(s);
@@ -83,7 +84,6 @@ function drawShape(
   const cx = (el.x / 100) * baseUnit * 1.45;
   const cy = (el.y / 100) * baseUnit * 1.1;
 
-  // Motion transforms
   const motionTime = progress01 * (1 + el.speed * 1.8) + nowSec * 0.15 * el.speed;
   let rot = (el.rotation * Math.PI) / 180;
   let scale = el.size;
@@ -118,11 +118,21 @@ function drawShape(
     case 'flicker':
       alpha *= 0.45 + 0.55 * Math.abs(Math.sin(motionTime * 19));
       break;
+    case 'slam': {
+      const slamT = easeOutCubic(Math.min(1, phaseProgress * 3.5));
+      scale *= lerp(1.8, 1.0, slamT);
+      alpha *= slamT;
+      break;
+    }
+    case 'static':
+      break;
   }
 
-  // Smooth fade-in and climax pop
   const distFromClimax = Math.abs(progress01 - climaxRatio);
-  const climaxBoost = distFromClimax < 0.08 ? 1 + (1 - distFromClimax / 0.08) * 0.28 : 1;
+  const climaxBoost =
+    el.shape !== 'custom_text' && distFromClimax < 0.08
+      ? 1 + (1 - distFromClimax / 0.08) * 0.28
+      : 1;
   scale *= climaxBoost;
 
   const r = baseUnit * 0.22 * scale;
@@ -131,9 +141,11 @@ function drawShape(
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(rot);
-  ctx.globalCompositeOperation = 'lighter';
+  if (el.shape !== 'custom_text') {
+    ctx.globalCompositeOperation = 'lighter';
+  }
   if (el.glow > 0.05) {
-    ctx.shadowColor = el.color;
+    ctx.shadowColor = el.shape === 'custom_text' ? el.secondaryColor : el.color;
     ctx.shadowBlur = Math.min(48, 18 * el.glow);
   }
 
@@ -141,6 +153,24 @@ function drawShape(
   const count = Math.max(1, Math.min(24, Math.round(el.count)));
 
   switch (shape) {
+    case 'custom_text': {
+      const label = (el.text ?? '').trim();
+      if (!label) break;
+      const px = Math.round(Math.max(14, baseUnit * 0.048 * scale));
+      const family =
+        el.fontStyle === 'serif'
+          ? 'Georgia, "Times New Roman", serif'
+          : el.fontStyle === 'mono'
+            ? '"JetBrains Mono", ui-monospace, monospace'
+            : '"Space Grotesk", system-ui, sans-serif';
+      ctx.font = `700 ${px}px ${family}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = hexToRgba(el.color, alpha);
+      ctx.fillText(label, 0, 0);
+      break;
+    }
+
     case 'four_point_star':
       drawFourPointStar(ctx, r * 1.35, 4, 0.22, el, alpha);
       break;
@@ -164,7 +194,6 @@ function drawShape(
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Orbiting rune glyphs around ring
       const tickCount = Math.max(4, count);
       for (let i = 0; i < tickCount; i++) {
         const a = (i / tickCount) * Math.PI * 2;
@@ -368,9 +397,14 @@ export function renderCutsceneFrame(
   nowSec: number,
 ) {
   const t = clamp01(progress01);
-  const isMythic = cutscene.tier === 'legendary_mythic';
-  const climaxRatio = isMythic ? 0.48 : 0.4;
-  const revealStart = climaxRatio + 0.04;
+  const tier: CutsceneTier = CUTSCENE_TIER_META[cutscene.tier]
+    ? cutscene.tier
+    : 'epic';
+  const climaxRatio = CUTSCENE_TIER_META[tier].climaxRatio;
+  const isMythic = tier === 'mythic';
+  const isLarge = tier === 'legendary' || isMythic;
+  const isSimple = tier === 'under_epic';
+  const revealStart = climaxRatio + 0.03;
   const baseUnit = Math.min(width, height);
 
   // 1. Dark atmospheric canvas fill
@@ -380,7 +414,10 @@ export function renderCutsceneFrame(
 
   // Ambient central nebula aura bloom
   const centerGlowRadius =
-    baseUnit * (t < climaxRatio ? lerp(0.28, 0.72, t / climaxRatio) : lerp(1.05, 0.75, (t - climaxRatio) / (1 - climaxRatio)));
+    baseUnit *
+    (t < climaxRatio
+      ? lerp(0.24, isMythic ? 0.95 : 0.72, t / climaxRatio)
+      : lerp(1.15, 0.78, (t - climaxRatio) / Math.max(0.01, 1 - climaxRatio)));
   const bgGrad = ctx.createRadialGradient(
     width / 2,
     height / 2,
@@ -389,48 +426,72 @@ export function renderCutsceneFrame(
     height / 2,
     Math.max(10, centerGlowRadius),
   );
-  bgGrad.addColorStop(0, hexToRgba(cutscene.primaryColor, isMythic ? 0.42 : 0.28));
-  bgGrad.addColorStop(0.5, hexToRgba(cutscene.secondaryColor, isMythic ? 0.2 : 0.12));
+  bgGrad.addColorStop(0, hexToRgba(cutscene.primaryColor, isMythic ? 0.5 : isSimple ? 0.28 : 0.4));
+  bgGrad.addColorStop(0.5, hexToRgba(cutscene.secondaryColor, isMythic ? 0.26 : isSimple ? 0.12 : 0.2));
   bgGrad.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // 2. Camera shake offset (peaks at climax explosion)
+  // 2. Camera shake offset (Mythic escalates dramatically before silence & explodes at drop)
   let shakeMag = 0;
   if (t < climaxRatio) {
-    shakeMag = Math.pow(t / climaxRatio, 2.2) * (isMythic ? 9 : 4) * cutscene.shakeIntensity;
+    const preSilence = isMythic && t > climaxRatio - 0.025 && t < climaxRatio;
+    shakeMag = preSilence
+      ? 0.5
+      : Math.pow(t / climaxRatio, 2.0) * (isMythic ? 14 : isLarge ? 10 : isSimple ? 3.5 : 8) * cutscene.shakeIntensity;
   } else {
-    const post = (t - climaxRatio) / (1 - climaxRatio);
-    shakeMag = Math.exp(-post * 5.2) * (isMythic ? 24 : 10) * cutscene.shakeIntensity;
+    const post = (t - climaxRatio) / Math.max(0.01, 1 - climaxRatio);
+    shakeMag = Math.exp(-post * 5.0) * (isMythic ? 32 : isLarge ? 26 : isSimple ? 9 : 20) * cutscene.shakeIntensity;
   }
   const shakeX = Math.sin(nowSec * 67) * shakeMag;
   const shakeY = Math.cos(nowSec * 83) * shakeMag;
 
-  // 3. Radial speed lines (high tension during buildup & explosive burst right after drop)
+  // 3. Radial speed lines + Mythic pre-climax reality cracks
   ctx.save();
   ctx.translate(width / 2 + shakeX, height / 2 + shakeY);
-  const rayCount = isMythic ? 40 : 20;
+  const rayCount = isMythic ? 56 : isLarge ? 44 : isSimple ? 18 : 34;
   const rayAlpha =
     t < climaxRatio
-      ? 0.08 + (t / climaxRatio) * 0.22
-      : Math.max(0.06, 0.35 * Math.exp(-((t - climaxRatio) * 4)));
+      ? 0.08 + (t / climaxRatio) * (isMythic ? 0.34 : 0.22)
+      : Math.max(0.06, 0.42 * Math.exp(-((t - climaxRatio) * 4)));
   ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < rayCount; i++) {
     const angle = (i / rayCount) * Math.PI * 2 + seeded(i + 9) * 0.18;
-    const inner = baseUnit * (t < climaxRatio ? 0.16 + seeded(i * 3) * 0.2 : 0.08);
-    const outer = baseUnit * (0.65 + seeded(i * 5) * 0.5);
+    const inner = baseUnit * (t < climaxRatio ? 0.14 + seeded(i * 3) * 0.22 : 0.06);
+    const outer = baseUnit * (0.7 + seeded(i * 5) * 0.55);
     ctx.strokeStyle = hexToRgba(
       i % 2 === 0 ? cutscene.primaryColor : cutscene.secondaryColor,
       rayAlpha,
     );
-    ctx.lineWidth = isMythic ? 1.5 + seeded(i) * 2.5 : 1.5;
+    ctx.lineWidth = isMythic ? 1.8 + seeded(i) * 3 : 1.5;
     ctx.beginPath();
     ctx.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
     ctx.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
     ctx.stroke();
   }
 
-  // 4. Render user's custom cutscene shapes & FX elements
+  // Mythic Act III reality-fracture lines right before the 20s supernova drop
+  if (isMythic && t > 0.5 && t < climaxRatio + 0.08) {
+    const crackIntensity =
+      t < climaxRatio
+        ? clamp01((t - 0.5) / (climaxRatio - 0.5))
+        : Math.max(0, 1 - (t - climaxRatio) / 0.08);
+    ctx.strokeStyle = hexToRgba('#ffffff', crackIntensity * 0.8);
+    ctx.lineWidth = 2.2;
+    for (let c = 0; c < 10; c++) {
+      const a = (c / 10) * Math.PI * 2 + 0.22;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      for (let s = 1; s <= 5; s++) {
+        const dist = (s / 5) * baseUnit * 0.72 * crackIntensity;
+        const j = (seeded(c * 13 + s * 5) - 0.5) * baseUnit * 0.08;
+        ctx.lineTo(Math.cos(a) * dist - Math.sin(a) * j, Math.sin(a) * dist + Math.cos(a) * j);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // 4. Render user's custom cutscene shapes & FX & custom text elements
   for (const el of cutscene.elements) {
     if (!el.visible) continue;
 
@@ -442,7 +503,7 @@ export function renderCutsceneFrame(
       phaseProgress = clamp01(t / climaxRatio);
     } else if (el.phase === 'climax') {
       const start = Math.max(0, climaxRatio - 0.04);
-      const end = Math.min(1, climaxRatio + 0.28);
+      const end = Math.min(1, climaxRatio + 0.24);
       visibleInPhase = t >= start && t <= end;
       phaseProgress = clamp01((t - start) / Math.max(0.01, end - start));
     } else if (el.phase === 'reveal') {
@@ -465,16 +526,26 @@ export function renderCutsceneFrame(
     Math.max(width, height) * 0.75,
   );
   vig.addColorStop(0, 'rgba(0,0,0,0)');
-  vig.addColorStop(1, 'rgba(0,0,0,0.82)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.84)');
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, width, height);
 
-  // 6. Climax Whiteout / Dimensional Flash
-  if (t >= climaxRatio - 0.02 && t <= climaxRatio + 0.24) {
-    const flashT = clamp01((t - (climaxRatio - 0.02)) / 0.26);
+  // 6a. Mythic false-climax mini pulse at ~38%
+  if (isMythic && t >= 0.36 && t <= 0.43) {
+    const pulseT = clamp01((t - 0.36) / 0.07);
+    const pulseAlpha = Math.sin(pulseT * Math.PI) * 0.28 * cutscene.flashIntensity;
+    if (pulseAlpha > 0.01) {
+      ctx.fillStyle = hexToRgba(cutscene.primaryColor, pulseAlpha);
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
+  // 6b. Main Climax Whiteout / Dimensional Flash
+  if (t >= climaxRatio - 0.015 && t <= climaxRatio + 0.22) {
+    const flashT = clamp01((t - (climaxRatio - 0.015)) / 0.235);
     const flashOpacity =
       Math.sin(Math.min(1, flashT) * Math.PI) *
-      (isMythic ? 0.92 : 0.65) *
+      (isMythic ? 0.98 : isLarge ? 0.92 : isSimple ? 0.65 : 0.86) *
       Math.min(1.2, cutscene.flashIntensity);
     if (flashOpacity > 0.01) {
       ctx.fillStyle = hexToRgba('#ffffff', flashOpacity);
@@ -482,40 +553,40 @@ export function renderCutsceneFrame(
     }
   }
 
-  // 7. Sol's RNG-style Buildup Whisper & Reveal Typography
+  // 7. Optional Built-in Buildup Headline Text & Reveal Title (completely optional!)
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  if (t < climaxRatio - 0.02 && cutscene.headlineText.trim()) {
-    const textAlpha = clamp01(Math.sin((t / climaxRatio) * Math.PI) * 1.4);
+  const showHeadline = cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0;
+  if (showHeadline && t < climaxRatio - 0.02 && cutscene.headlineText.trim()) {
+    const textAlpha = clamp01(Math.sin((t / climaxRatio) * Math.PI) * 1.45);
     ctx.save();
     ctx.font = `600 ${Math.round(Math.max(14, baseUnit * 0.032))}px "Space Grotesk", system-ui, sans-serif`;
     ctx.shadowColor = cutscene.primaryColor;
     ctx.shadowBlur = 16;
-    ctx.fillStyle = hexToRgba('#f8fafc', textAlpha * 0.92);
+    ctx.fillStyle = hexToRgba('#f8fafc', textAlpha * 0.94);
     ctx.fillText(cutscene.headlineText, width / 2, height * 0.78);
     ctx.restore();
   }
 
-  if (t >= revealStart) {
-    const revT = easeOutCubic((t - revealStart) / Math.max(0.05, 0.25));
+  const showReveal = cutscene.showRevealText ?? true;
+  if (showReveal && t >= revealStart) {
+    const revT = easeOutCubic((t - revealStart) / Math.max(0.05, 0.22));
     const titleScale = lerp(1.28, 1.0, revT);
     const nameSize = Math.round(
-      Math.max(28, baseUnit * (isMythic ? 0.088 : 0.072)),
+      Math.max(28, baseUnit * (isMythic ? 0.095 : isLarge ? 0.088 : isSimple ? 0.072 : 0.082)),
     );
 
     ctx.save();
     ctx.translate(width / 2 + shakeX * 0.3, height * 0.76 + shakeY * 0.3);
     ctx.scale(titleScale, titleScale);
 
-    // Aura Name
     ctx.font = `800 ${nameSize}px "Space Grotesk", system-ui, sans-serif`;
     ctx.shadowColor = cutscene.primaryColor;
-    ctx.shadowBlur = isMythic ? 34 : 22;
+    ctx.shadowBlur = isMythic ? 38 : isLarge ? 32 : 22;
     ctx.fillStyle = hexToRgba('#ffffff', revT);
     ctx.fillText(aura.name, 0, 0);
 
-    // Rarity & Odds Line
     const subSize = Math.round(Math.max(13, baseUnit * 0.028));
     ctx.font = `700 ${subSize}px "JetBrains Mono", monospace`;
     ctx.shadowColor = cutscene.secondaryColor;

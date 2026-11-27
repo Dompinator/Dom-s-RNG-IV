@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Sparkles,
   Trash2,
+  Type,
   Upload,
   Volume2,
   VolumeX,
@@ -26,14 +27,18 @@ import {
 import {
   CUTSCENE_AUDIO_LABELS,
   CUTSCENE_AUDIO_PRESETS,
+  CUTSCENE_FONT_STYLES,
   CUTSCENE_MOTIONS,
   CUTSCENE_PHASES,
   CUTSCENE_SHAPE_LABELS,
   CUTSCENE_SHAPES,
+  CUTSCENE_TIER_META,
+  CUTSCENE_TIERS,
   type AuraCutsceneConfig,
   type AuraProject,
   type CutsceneAudioPreset,
   type CutsceneElement,
+  type CutsceneFontStyle,
   type CutsceneMotion,
   type CutscenePhase,
   type CutsceneShapeType,
@@ -64,6 +69,14 @@ const MOTION_LABELS: Record<CutsceneMotion, string> = {
   converge: 'Implode / Converge',
   shatter: 'Explosive Shatter',
   flicker: 'High-Voltage Flicker',
+  slam: 'Slam In',
+  static: 'Still / Static',
+};
+
+const FONT_STYLE_LABELS: Record<CutsceneFontStyle, string> = {
+  display: 'Display Bold',
+  serif: 'Mythic Serif',
+  mono: 'Technical Mono',
 };
 
 export function CutsceneEditorWorkspace({
@@ -75,12 +88,14 @@ export function CutsceneEditorWorkspace({
   const defaultPrimary = project.layers[0]?.color ?? '#fbbf24';
   const defaultSecondary = project.layers[0]?.secondaryColor ?? '#38bdf8';
 
-  const cutscene: AuraCutsceneConfig = useMemo(
-    () =>
+  const cutscene: AuraCutsceneConfig = useMemo(() => {
+    const base =
       project.cutscene ??
-      createDefaultCutscene('legendary_mythic', defaultPrimary, defaultSecondary),
-    [project.cutscene, defaultPrimary, defaultSecondary],
-  );
+      createDefaultCutscene('epic', defaultPrimary, defaultSecondary);
+    // Normalize any legacy tier key safely
+    const safeTier: CutsceneTier = CUTSCENE_TIER_META[base.tier] ? base.tier : 'epic';
+    return safeTier === base.tier ? base : { ...base, tier: safeTier };
+  }, [project.cutscene, defaultPrimary, defaultSecondary]);
 
   const [selectedElId, setSelectedElId] = useState<string | null>(
     cutscene.elements[0]?.id ?? null,
@@ -185,24 +200,42 @@ export function CutsceneEditorWorkspace({
   };
 
   const handleSwitchTier = (tier: CutsceneTier) => {
-    const nextDuration =
-      tier === 'epic'
-        ? Math.min(3.2, Math.max(1.8, cutscene.duration > 3.5 ? 2.5 : cutscene.duration))
-        : Math.max(4.5, cutscene.duration < 4.0 ? 5.6 : cutscene.duration);
-    commitCutscene({
+    const meta = CUTSCENE_TIER_META[tier];
+    const nextAudioPreset: CutsceneAudioPreset =
+      tier === 'under_epic'
+        ? 'epic_chime'
+        : tier === 'legendary' && cutscene.audioPreset === 'epic_chime'
+          ? 'celestial_choir'
+          : cutscene.audioPreset === 'epic_chime'
+            ? 'cosmic_sub_drop'
+            : cutscene.audioPreset;
+
+    const next: AuraCutsceneConfig = {
       ...cutscene,
       enabled: true,
       tier,
-      duration: nextDuration,
-      shakeIntensity: tier === 'epic' ? 0.75 : 1.6,
-      flashIntensity: tier === 'epic' ? 1.0 : 1.5,
-      audioPreset:
-        tier === 'epic' && cutscene.audioPreset === 'cosmic_sub_drop'
-          ? 'epic_chime'
-          : tier === 'legendary_mythic' && cutscene.audioPreset === 'epic_chime'
-            ? 'cosmic_sub_drop'
-            : cutscene.audioPreset,
-    });
+      duration: meta.defaultDuration,
+      shakeIntensity:
+        tier === 'under_epic'
+          ? 0.75
+          : tier === 'epic'
+            ? 1.5
+            : tier === 'legendary'
+              ? 1.75
+              : 2.1,
+      flashIntensity:
+        tier === 'under_epic'
+          ? 1.0
+          : tier === 'epic'
+            ? 1.45
+            : tier === 'legendary'
+              ? 1.65
+              : 2.0,
+      audioPreset: nextAudioPreset,
+    };
+    commitCutscene(next);
+    playTimeRef.current = 0;
+    setPlayTime(0);
   };
 
   const handleApplyTemplate = (templateId: string) => {
@@ -220,8 +253,9 @@ export function CutsceneEditorWorkspace({
 
   const handleAddShape = (shape: CutsceneShapeType) => {
     const el = createCutsceneElement(shape, {
-      color: cutscene.primaryColor,
-      secondaryColor: cutscene.secondaryColor,
+      color: shape === 'custom_text' ? '#ffffff' : cutscene.primaryColor,
+      secondaryColor:
+        shape === 'custom_text' ? cutscene.primaryColor : cutscene.secondaryColor,
     });
     const next = {
       ...cutscene,
@@ -319,7 +353,8 @@ export function CutsceneEditorWorkspace({
     }
   };
 
-  const climaxRatio = cutscene.tier === 'epic' ? 0.4 : 0.48;
+  const tierMeta = CUTSCENE_TIER_META[cutscene.tier] ?? CUTSCENE_TIER_META.epic;
+  const climaxRatio = tierMeta.climaxRatio;
 
   return (
     <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -355,36 +390,44 @@ export function CutsceneEditorWorkspace({
               />
             </label>
 
-            {/* 2 Cutscene Tiers */}
+            {/* 4 Cutscene Tiers */}
             <div>
               <div className="text-[11px] font-medium text-slate-400 mb-1.5">
                 Cutscene Type
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleSwitchTier('epic')}
-                  className={`px-2.5 py-2 rounded-lg border text-left transition-colors cursor-pointer ${
-                    cutscene.tier === 'epic'
-                      ? 'bg-purple-500/20 border-purple-400/60 text-white'
-                      : 'bg-[#141824] border-white/[0.07] text-slate-300 hover:border-white/[0.15]'
-                  }`}
-                >
-                  <div className="text-xs font-semibold">Epic</div>
-                  <div className="text-[10px] text-slate-400">Simple &amp; short (~2.5s)</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSwitchTier('legendary_mythic')}
-                  className={`px-2.5 py-2 rounded-lg border text-left transition-colors cursor-pointer ${
-                    cutscene.tier === 'legendary_mythic'
-                      ? 'bg-amber-500/20 border-amber-400/60 text-white'
-                      : 'bg-[#141824] border-white/[0.07] text-slate-300 hover:border-white/[0.15]'
-                  }`}
-                >
-                  <div className="text-xs font-semibold">Legendary / Mythic</div>
-                  <div className="text-[10px] text-slate-400">Insane multi-phase (~5.6s)</div>
-                </button>
+                {CUTSCENE_TIERS.map((tierKey) => {
+                  const meta = CUTSCENE_TIER_META[tierKey];
+                  const active = cutscene.tier === tierKey;
+                  const activeStyle =
+                    tierKey === 'mythic'
+                      ? 'bg-rose-500/20 border-rose-400/60 text-white'
+                      : tierKey === 'legendary'
+                        ? 'bg-amber-500/20 border-amber-400/60 text-white'
+                        : tierKey === 'epic'
+                          ? 'bg-purple-500/20 border-purple-400/60 text-white'
+                          : 'bg-sky-500/20 border-sky-400/60 text-white';
+
+                  return (
+                    <button
+                      key={tierKey}
+                      type="button"
+                      onClick={() => handleSwitchTier(tierKey)}
+                      className={`px-2.5 py-2 rounded-lg border text-left transition-colors cursor-pointer ${
+                        active
+                          ? activeStyle
+                          : 'bg-[#141824] border-white/[0.07] text-slate-300 hover:border-white/[0.15]'
+                      }`}
+                    >
+                      <div className="text-[11px] font-semibold leading-tight">
+                        {meta.label}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">
+                        {meta.shortDesc}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -409,18 +452,29 @@ export function CutsceneEditorWorkspace({
               </div>
             </section>
 
-            {/* 12 Shape & FX Palette */}
+            {/* Addable On-Screen Text Shortcut + 12 Shapes & FX */}
             <section className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold text-slate-300">
-                  Add Shapes &amp; FX
+                  Add Shapes, Text &amp; FX
                 </span>
                 <span className="text-[10px] text-slate-500 font-mono-num">
                   {cutscene.elements.length}/24
                 </span>
               </div>
+
+              <button
+                type="button"
+                onClick={() => handleAddShape('custom_text')}
+                disabled={cutscene.elements.length >= 24}
+                className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-xs font-semibold text-amber-200 disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                <Type className="w-3.5 h-3.5" />
+                <span>Add On-Screen Text</span>
+              </button>
+
               <div className="grid grid-cols-2 gap-1">
-                {CUTSCENE_SHAPES.map((shape) => (
+                {CUTSCENE_SHAPES.filter((s) => s !== 'custom_text').map((shape) => (
                   <button
                     key={shape}
                     type="button"
@@ -442,7 +496,7 @@ export function CutsceneEditorWorkspace({
               </div>
               {cutscene.elements.length === 0 ? (
                 <div className="p-3 rounded-lg border border-dashed border-white/[0.1] text-center text-[11px] text-slate-400">
-                  Click any shape above to start building your cutscene.
+                  Click any shape or text button above to build your cutscene.
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -523,7 +577,7 @@ export function CutsceneEditorWorkspace({
                             </button>
                           </div>
                         </div>
-                        <div className="mt-1 pl-4 text-[10px] text-slate-500 flex items-center gap-1.5">
+                        <div className="mt-1 pl-4 text-[10px] text-slate-500 flex items-center gap-1.5 truncate">
                           <span>{CUTSCENE_SHAPE_LABELS[el.shape]}</span>
                           <span>·</span>
                           <span>{PHASE_LABELS[el.phase]}</span>
@@ -547,11 +601,7 @@ export function CutsceneEditorWorkspace({
           <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
             <div className="pointer-events-auto flex items-center gap-2 bg-[#0f131d]/90 border border-white/[0.08] rounded-md px-3 py-1.5 text-xs text-slate-300">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span className="font-medium text-white">
-                {cutscene.tier === 'epic'
-                  ? 'Epic Short Cutscene'
-                  : 'Legendary / Mythic Cutscene'}
-              </span>
+              <span className="font-medium text-white">{tierMeta.label}</span>
               <span className="text-slate-500">·</span>
               <span className="font-mono-num text-slate-400">
                 {playTime.toFixed(2)}s / {cutscene.duration.toFixed(1)}s
@@ -637,14 +687,14 @@ export function CutsceneEditorWorkspace({
         </div>
       </div>
 
-      {/* Right Panel: Selected Shape Properties + Master Cutscene & Audio Settings */}
+      {/* Right Panel: Selected Element Inspector + On-Screen Text Choices + Audio Settings */}
       {!zenMode && (
         <aside className="w-80 xl:w-96 shrink-0 h-full bg-[#0e1119] border-l border-white/[0.08] overflow-y-auto p-3.5 space-y-5 select-none">
           {selectedElement ? (
             <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold text-white">
-                  Selected Shape / FX
+                  Selected Element
                 </h3>
                 <span className="text-[11px] text-amber-400">
                   {CUTSCENE_SHAPE_LABELS[selectedElement.shape]}
@@ -652,7 +702,7 @@ export function CutsceneEditorWorkspace({
               </div>
 
               <div>
-                <label className="block text-[11px] text-slate-400 mb-1">Name</label>
+                <label className="block text-[11px] text-slate-400 mb-1">Element Name</label>
                 <input
                   type="text"
                   value={selectedElement.name}
@@ -664,14 +714,57 @@ export function CutsceneEditorWorkspace({
                 />
               </div>
 
+              {selectedElement.shape === 'custom_text' && (
+                <div className="space-y-2.5 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                  <div>
+                    <label className="block text-[11px] font-medium text-amber-200 mb-1">
+                      On-Screen Text
+                    </label>
+                    <input
+                      type="text"
+                      value={selectedElement.text ?? ''}
+                      maxLength={80}
+                      placeholder="Enter text to show on screen..."
+                      onChange={(e) =>
+                        handleUpdateElement(selectedElement.id, { text: e.target.value })
+                      }
+                      className="w-full bg-[#10141f] border border-white/[0.12] rounded-md px-2.5 py-1.5 text-xs text-white outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1">
+                      Font Style
+                    </label>
+                    <select
+                      value={selectedElement.fontStyle ?? 'display'}
+                      onChange={(e) =>
+                        handleUpdateElement(selectedElement.id, {
+                          fontStyle: e.target.value as CutsceneFontStyle,
+                        })
+                      }
+                      className="w-full bg-[#10141f] border border-white/[0.1] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
+                    >
+                      {CUTSCENE_FONT_STYLES.map((fs) => (
+                        <option key={fs} value={fs}>
+                          {FONT_STYLE_LABELS[fs]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">Shape</label>
+                  <label className="block text-[11px] text-slate-400 mb-1">Type / Shape</label>
                   <select
                     value={selectedElement.shape}
                     onChange={(e) =>
                       handleUpdateElement(selectedElement.id, {
                         shape: e.target.value as CutsceneShapeType,
+                        ...(e.target.value === 'custom_text' && !selectedElement.text
+                          ? { text: 'THE HEAVENS TREMBLE...' }
+                          : {}),
                       })
                     }
                     className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
@@ -726,7 +819,7 @@ export function CutsceneEditorWorkspace({
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1">
-                    Primary Color
+                    {selectedElement.shape === 'custom_text' ? 'Text Color' : 'Primary Color'}
                   </label>
                   <div className="flex items-center gap-2 bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1">
                     <input
@@ -746,7 +839,7 @@ export function CutsceneEditorWorkspace({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1">
-                    Secondary Color
+                    {selectedElement.shape === 'custom_text' ? 'Glow Color' : 'Secondary Color'}
                   </label>
                   <div className="flex items-center gap-2 bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1">
                     <input
@@ -803,33 +896,73 @@ export function CutsceneEditorWorkspace({
             </section>
           ) : (
             <div className="p-3 rounded-lg bg-[#141824] border border-white/[0.06] text-xs text-slate-400">
-              Select an element on the left or add a new shape to customize its motion and glow.
+              Select an element on the left or add a new shape/text to customize its motion and glow.
             </div>
           )}
 
           <hr className="border-white/[0.07]" />
 
-          {/* Master Cutscene Visual & Timing Settings */}
+          {/* Optional On-Screen Text & Atmosphere Controls */}
           <section className="space-y-3">
             <h3 className="text-xs font-semibold text-white">
-              Cutscene Atmosphere &amp; Climax
+              On-Screen Text &amp; Atmosphere
             </h3>
 
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-1">
-                Buildup Whisper / Headline Text
-              </label>
+            <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-2.5 py-2 cursor-pointer">
+              <div>
+                <div className="text-xs font-medium text-slate-200">
+                  Show Buildup Headline Text
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Optional whisper quote before climax drop
+                </div>
+              </div>
               <input
-                type="text"
-                value={cutscene.headlineText}
-                maxLength={80}
-                placeholder="e.g. A distant star awakens..."
+                type="checkbox"
+                checked={cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0}
                 onChange={(e) =>
-                  commitCutscene({ ...cutscene, headlineText: e.target.value })
+                  commitCutscene({ ...cutscene, showHeadlineText: e.target.checked })
                 }
-                className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2.5 py-1.5 text-xs text-white outline-none"
+                className="accent-amber-500 w-4 h-4 shrink-0"
               />
-            </div>
+            </label>
+
+            {(cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0) && (
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  Buildup Headline Text
+                </label>
+                <input
+                  type="text"
+                  value={cutscene.headlineText}
+                  maxLength={80}
+                  placeholder="e.g. A distant star awakens..."
+                  onChange={(e) =>
+                    commitCutscene({ ...cutscene, headlineText: e.target.value })
+                  }
+                  className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2.5 py-1.5 text-xs text-white outline-none"
+                />
+              </div>
+            )}
+
+            <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-2.5 py-2 cursor-pointer">
+              <div>
+                <div className="text-xs font-medium text-slate-200">
+                  Show Aura Name on Reveal
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  Display Aura Name &amp; 1-in-N odds after impact
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={cutscene.showRevealText ?? true}
+                onChange={(e) =>
+                  commitCutscene({ ...cutscene, showRevealText: e.target.checked })
+                }
+                className="accent-amber-500 w-4 h-4 shrink-0"
+              />
+            </label>
 
             <div className="grid grid-cols-3 gap-2">
               {(
@@ -870,7 +1003,7 @@ export function CutsceneEditorWorkspace({
               <input
                 type="range"
                 min={1.2}
-                max={9.0}
+                max={25.0}
                 step={0.1}
                 value={cutscene.duration}
                 onChange={(e) =>
@@ -957,7 +1090,10 @@ export function CutsceneEditorWorkspace({
                     key={presetKey}
                     type="button"
                     onClick={() => {
-                      const next = { ...cutscene, audioPreset: presetKey as CutsceneAudioPreset };
+                      const next = {
+                        ...cutscene,
+                        audioPreset: presetKey as CutsceneAudioPreset,
+                      };
                       commitCutscene(next);
                       audioRef.current?.play(next, muted, 0);
                       playTimeRef.current = 0;
