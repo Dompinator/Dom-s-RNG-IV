@@ -41,10 +41,25 @@ service cloud.firestore {
       );
     }
 
+    function isValidAuraTitle(proj) {
+      return !('titleConfig' in proj) || (
+        proj.titleConfig is map
+        && proj.titleConfig.enabled is bool
+        && proj.titleConfig.text is string && proj.titleConfig.text.size() <= 48
+        && proj.titleConfig.size is number && proj.titleConfig.size >= 0.5 && proj.titleConfig.size <= 3.0
+        && proj.titleConfig.heightOffset is number && proj.titleConfig.heightOffset >= -1.0 && proj.titleConfig.heightOffset <= 4.0
+        && proj.titleConfig.color is string && proj.titleConfig.color.size() <= 16
+        && proj.titleConfig.glowColor is string && proj.titleConfig.glowColor.size() <= 16
+        && proj.titleConfig.fontStyle in ['display', 'serif', 'mono']
+        && proj.titleConfig.animation in ['float', 'pulse', 'shimmer', 'none']
+      );
+    }
+
     function isValidAuraPoseAndCutscene(proj) {
       return (!('posePreset' in proj) || proj.posePreset in [
           'idle', 'levitate', 'meditate', 'crossed_arms', 'sword_stance', 'ascension', 'throne'
         ])
+        && isValidAuraTitle(proj)
         && (!('cutscene' in proj) || (
           proj.cutscene is map
           && proj.cutscene.enabled is bool

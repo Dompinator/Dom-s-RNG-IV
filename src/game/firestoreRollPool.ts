@@ -114,6 +114,21 @@ export function buildSanitizedProject(project: AuraProject, safeId: string): Aur
     };
   }
 
+  const safeTitle = project.titleConfig
+    ? {
+        ...project.titleConfig,
+        enabled: Boolean(project.titleConfig.enabled),
+        text: (project.titleConfig.text ?? '').slice(0, 48),
+        size: Math.max(0.5, Math.min(3.0, Number(project.titleConfig.size) || 1.0)),
+        heightOffset: Math.max(
+          -1.0,
+          Math.min(4.0, Number.isFinite(project.titleConfig.heightOffset) ? project.titleConfig.heightOffset : 0.55),
+        ),
+        color: (project.titleConfig.color ?? '#ffffff').slice(0, 16),
+        glowColor: (project.titleConfig.glowColor ?? '#fbbf24').slice(0, 16),
+      }
+    : undefined;
+
   return stripUndefinedDeep({
     ...project,
     id: safeId,
@@ -126,6 +141,7 @@ export function buildSanitizedProject(project: AuraProject, safeId: string): Aur
     ...(typeof project.levitate === 'boolean' ? { levitate: project.levitate } : {}),
     ...(project.posePreset ? { posePreset: project.posePreset } : {}),
     ...(safeCutscene ? { cutscene: safeCutscene } : { cutscene: undefined }),
+    ...(safeTitle ? { titleConfig: safeTitle } : { titleConfig: undefined }),
   });
 }
 

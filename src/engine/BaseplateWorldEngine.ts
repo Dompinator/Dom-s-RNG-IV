@@ -4,7 +4,6 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { RARITY_COLOR_STYLES } from '../aura/rarity';
 import { createContactShadowTexture } from '../aura/textures';
 import {
   POSE_PRESET_META,
@@ -18,6 +17,7 @@ import type {
   PlayerPose,
   RemotePlayerState,
 } from '../game/multiplayerSync';
+import { AuraTitleSpriteController } from './auraTitleSprite';
 import {
   buildLayerRuntime,
   getLayerStructuralSignature,
@@ -114,34 +114,21 @@ const _camGoal = new THREE.Vector3();
 const _lookTarget = new THREE.Vector3();
 const _listenerWorldPos = new THREE.Vector3();
 
-const RARITY_HEX_COLORS: Record<string, string> = {
-  Common: '#94a3b8',
-  Uncommon: '#34d399',
-  Rare: '#38bdf8',
-  Epic: '#c084fc',
-  Legendary: '#fbbf24',
-  Mythic: '#fb7185',
-};
-
-function createNameplateTexture(
-  displayName: string,
-  aura: AuraProject | null,
-): THREE.CanvasTexture {
+function createNameplateTexture(displayName: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
-  canvas.height = 144;
+  canvas.height = 96;
   const ctx = canvas.getContext('2d')!;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Rounded dark translucent backing card
-  const padX = 28;
-  const boxH = aura ? 112 : 68;
-  const boxY = aura ? 16 : 38;
+  const padX = 48;
+  const boxH = 68;
+  const boxY = 14;
   const boxW = canvas.width - padX * 2;
-  const r = 22;
+  const r = 20;
 
-  ctx.fillStyle = 'rgba(10, 14, 24, 0.78)';
+  ctx.fillStyle = 'rgba(10, 14, 24, 0.72)';
   ctx.beginPath();
   ctx.moveTo(padX + r, boxY);
   ctx.lineTo(padX + boxW - r, boxY);
@@ -155,31 +142,15 @@ function createNameplateTexture(
   ctx.closePath();
   ctx.fill();
 
-  ctx.strokeStyle = aura
-    ? RARITY_HEX_COLORS[aura.rarity.classification] ?? 'rgba(255,255,255,0.22)'
-    : 'rgba(255, 255, 255, 0.16)';
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+  ctx.lineWidth = 2.5;
   ctx.stroke();
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '700 36px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx.font = '700 34px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
   ctx.fillStyle = '#f8fafc';
-  ctx.fillText(
-    displayName.slice(0, 22),
-    canvas.width / 2,
-    aura ? boxY + 38 : boxY + boxH / 2,
-  );
-
-  if (aura) {
-    const colorHex =
-      RARITY_HEX_COLORS[aura.rarity.classification] ??
-      (RARITY_COLOR_STYLES[aura.rarity.classification] ? '#fbbf24' : '#cbd5e1');
-    ctx.font = '600 25px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-    ctx.fillStyle = colorHex;
-    const prefix = aura.audio ? '♪ ' : '✦ ';
-    ctx.fillText(`${prefix}${aura.name.slice(0, 24)}`, canvas.width / 2, boxY + 80);
-  }
+  ctx.fillText(displayName.slice(0, 22), canvas.width / 2, boxY + boxH / 2);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -199,6 +170,7 @@ interface RemotePlayerRuntime {
   nameplateMat: THREE.SpriteMaterial;
   nameplateTex: THREE.CanvasTexture;
   nameplateSig: string;
+  auraTitle: AuraTitleSpriteController;
   runtimes: Map<string, CompiledLayerRuntime>;
   spatialAudio: SpatialAuraAudioController;
   currentPos: THREE.Vector3;
@@ -265,6 +237,7 @@ export class BaseplateWorldEngine {
   private sharedListener: THREE.AudioListener;
   private sharedAudioBuffers = new Map<string, AudioBuffer>();
   private spatialAudio: SpatialAuraAudioController;
+  private localAuraTitle: AuraTitleSpriteController;
   private audioMuted = false;
   private onAudioStateChange?: (state: SpatialAudioState) => void;
 
@@ -343,6 +316,7 @@ export class BaseplateWorldEngine {
     // R6 Player Character
     this.rig = createR6Character();
     this.scene.add(this.rig.root);
+    this.localAuraTitle = new AuraTitleSpriteController(this.scene);
 
     // Grounded Contact Shadow
     this.shadowTex = createContactShadowTexture();
@@ -582,7 +556,7 @@ export class BaseplateWorldEngine {
     this.camDistance = THREE.MathUtils.clamp(
       this.camDistance + e.deltaY * 0.006,
       3.2,
-      18.0,
+      24.0,
     );
   };
 
@@ -725,16 +699,18 @@ export class BaseplateWorldEngine {
     this.scene.add(contactShadow);
 
     const aura = p.equippedAuraId ? this.catalogMap.get(p.equippedAuraId) ?? null : null;
-    const nameplateTex = createNameplateTexture(p.displayName, aura);
+    const nameplateTex = createNameplateTexture(p.displayName);
     const nameplateMat = new THREE.SpriteMaterial({
       map: nameplateTex,
       transparent: true,
       depthWrite: false,
     });
     const nameplate = new THREE.Sprite(nameplateMat);
-    nameplate.scale.set(2.45, 0.68, 1);
-    nameplate.position.set(p.x, p.y + 2.85, p.z);
+    nameplate.scale.set(2.15, 0.42, 1);
+    nameplate.position.set(p.x, p.y + 2.65, p.z);
     this.scene.add(nameplate);
+
+    const auraTitle = new AuraTitleSpriteController(this.scene);
 
     const spatialAudio = new SpatialAuraAudioController(this.camera, {
       listener: this.sharedListener,
@@ -753,7 +729,8 @@ export class BaseplateWorldEngine {
       nameplate,
       nameplateMat,
       nameplateTex,
-      nameplateSig: `${p.displayName}|${aura?.id ?? ''}|${aura?.name ?? ''}|${Boolean(aura?.audio)}`,
+      nameplateSig: p.displayName,
+      auraTitle,
       runtimes: new Map(),
       spatialAudio,
       currentPos: new THREE.Vector3(p.x, p.y, p.z),
@@ -790,19 +767,19 @@ export class BaseplateWorldEngine {
       remote.spatialAudio.setAuraAudio(remote.rig.anchors.root, undefined);
     }
 
-    const nextSig = `${displayName}|${aura?.id ?? ''}|${aura?.name ?? ''}|${Boolean(aura?.audio)}`;
-    if (nextSig !== remote.nameplateSig) {
+    if (displayName !== remote.nameplateSig) {
       const oldTex = remote.nameplateTex;
-      const nextTex = createNameplateTexture(displayName, aura);
+      const nextTex = createNameplateTexture(displayName);
       remote.nameplateTex = nextTex;
       remote.nameplateMat.map = nextTex;
       remote.nameplateMat.needsUpdate = true;
-      remote.nameplateSig = nextSig;
+      remote.nameplateSig = displayName;
       oldTex.dispose();
     }
   }
 
   private disposeRemotePlayer(remote: RemotePlayerRuntime) {
+    remote.auraTitle.dispose();
     remote.spatialAudio.dispose();
     for (const r of remote.runtimes.values()) {
       r.dispose();
@@ -999,7 +976,7 @@ export class BaseplateWorldEngine {
       this.playerPos.z,
     );
 
-    // 6. Update Equipped Aura Layers (with live music-synced rhythm if song attached)
+    // 6. Update Equipped Aura Layers & Title Above Aura
     this.spatialAudio.updateDistanceAttenuation(this.playerPos, true);
     const localMusic = this.spatialAudio.sampleMusicSync(dt);
     const pixelRatio = this.renderer.getPixelRatio();
@@ -1011,6 +988,7 @@ export class BaseplateWorldEngine {
         }
       }
     }
+    this.localAuraTitle.update(this.elapsed, this.equippedAura, this.rig);
 
     // 7. Update Third-Person Follow Camera
     const horizDist = Math.cos(this.camPitch) * this.camDistance;
@@ -1060,7 +1038,7 @@ export class BaseplateWorldEngine {
 
       remote.nameplate.position.set(
         remote.currentPos.x,
-        remote.currentPos.y + remote.rig.bodyRoot.position.y + 2.85,
+        remote.currentPos.y + remote.rig.bodyRoot.position.y + 2.62,
         remote.currentPos.z,
       );
 
@@ -1075,6 +1053,7 @@ export class BaseplateWorldEngine {
           }
         }
       }
+      remote.auraTitle.update(this.elapsed, remote.equippedAura, remote.rig);
     }
 
     if (this.isSoftwareGl || !this.composer) {
@@ -1115,6 +1094,7 @@ export class BaseplateWorldEngine {
     }
     this.runtimes.clear();
 
+    this.localAuraTitle.dispose();
     this.rig.dispose();
     this.worldDisposables.forEach((d) => d.dispose());
     this.envRT.dispose();

@@ -13,6 +13,7 @@ import type {
   CameraPreset,
   CharacterPoseMode,
 } from '../aura/types';
+import { AuraTitleSpriteController } from './auraTitleSprite';
 import {
   buildLayerRuntime,
   getLayerStructuralSignature,
@@ -96,6 +97,7 @@ export class AuraViewportEngine {
   private contactShadowTex: THREE.CanvasTexture;
   private stageDisposables: { dispose: () => void }[] = [];
   private spatialAudio: SpatialAuraAudioController;
+  private auraTitle: AuraTitleSpriteController;
 
   constructor(container: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.container = container;
@@ -141,7 +143,7 @@ export class AuraViewportEngine {
     this.controls.enableDamping = !this.isSoftwareGl;
     this.controls.dampingFactor = 0.07;
     this.controls.minDistance = 1.6;
-    this.controls.maxDistance = 16;
+    this.controls.maxDistance = 24;
     this.controls.maxPolarAngle = Math.PI * 0.62;
     this.controls.addEventListener('start', () => {
       this.camTransitionActive = false;
@@ -230,6 +232,7 @@ export class AuraViewportEngine {
     // Classic 6-part R6 Character
     this.rig = createR6Character();
     this.scene.add(this.rig.root);
+    this.auraTitle = new AuraTitleSpriteController(this.scene);
 
     // Post-processing Bloom on GPU
     if (!this.isSoftwareGl) {
@@ -469,6 +472,7 @@ export class AuraViewportEngine {
 
     this.controls.update();
     this.rig.update(this.elapsed, this.poseMode);
+    this.auraTitle.update(this.elapsed, this.currentProject, this.rig);
 
     if (this.currentProject) {
       this.spatialAudio.updateDistanceAttenuation(this.camera.position);
@@ -507,6 +511,7 @@ export class AuraViewportEngine {
     }
     this.runtimes.clear();
 
+    this.auraTitle.dispose();
     this.rig.dispose();
     this.stageDisposables.forEach((d) => d.dispose());
     this.envRT.dispose();

@@ -1,7 +1,8 @@
-import { Film, Layers } from 'lucide-react';
+import { Film, Layers, Type } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AddLayerModal } from './components/AddLayerModal';
 import { AuraRegistryModal } from './components/AuraRegistryModal';
+import { AuraTitleEditorPanel } from './components/AuraTitleEditorPanel';
 import { AuthModal } from './components/AuthModal';
 import { BaseplatePlayView } from './components/BaseplatePlayView';
 import { CutsceneEditorWorkspace } from './components/CutsceneEditorWorkspace';
@@ -38,6 +39,7 @@ import {
   type AuraLayer,
   type AuraPosePreset,
   type AuraProject,
+  type AuraTitleConfig,
   type EffectType,
   type LayerAnimationSettings,
   type LayerEffectSettings,
@@ -158,7 +160,7 @@ export default function App() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [zenMode, setZenMode] = useState(false);
-  const [studioTab, setStudioTab] = useState<'3d' | 'cutscene'>('3d');
+  const [studioTab, setStudioTab] = useState<'3d' | 'cutscene' | 'title'>('3d');
   const [isExporting, setIsExporting] = useState(false);
 
   // Playable Game State (Roll Pool, Storage, Equip)
@@ -792,6 +794,18 @@ export default function App() {
     });
   };
 
+  const handleUpdateTitleConfig = (titleConfig: AuraTitleConfig | undefined) => {
+    commitChange((prev) => {
+      const next = { ...prev };
+      if (titleConfig) {
+        next.titleConfig = titleConfig;
+      } else {
+        delete next.titleConfig;
+      }
+      return next;
+    });
+  };
+
   const handleSyncAllToMusic = (subMode: AnimationMode) => {
     commitChange((prev) => ({
       ...prev,
@@ -1298,7 +1312,7 @@ export default function App() {
           />
         ) : (
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Studio Sub-Navigation: 3D Aura Editor vs Cutscene Editor */}
+            {/* Studio Sub-Navigation: 3D Aura Layers vs Cutscene Editor vs Title Editor */}
             <div className="h-10 shrink-0 bg-[#0b0e15] border-b border-white/[0.07] px-4 flex items-center justify-between">
               <div className="flex items-center gap-1.5">
                 <button
@@ -1328,12 +1342,29 @@ export default function App() {
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   )}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setStudioTab('title')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                    studioTab === 'title'
+                      ? 'bg-[#1a2030] text-white border border-white/[0.12]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Type className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Aura Title</span>
+                  {(project.titleConfig?.enabled ?? true) && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                  )}
+                </button>
               </div>
               <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400">
                 <span>
                   {studioTab === 'cutscene'
                     ? 'Custom Sol\'s RNG-inspired roll cutscene & synthesized impact audio'
-                    : 'Build 3D aura layers, character pose presets, and spatial audio'}
+                    : studioTab === 'title'
+                      ? 'Customize the overhead Title & Rarity floating above your aura'
+                      : 'Build 3D aura layers, character pose presets, and spatial audio'}
                 </span>
               </div>
             </div>
@@ -1347,7 +1378,7 @@ export default function App() {
               />
             ) : (
               <div className="flex-1 min-h-0 flex overflow-hidden">
-                {!zenMode && (
+                {studioTab === '3d' && !zenMode && (
                   <LayerPanel
                     project={project}
                     selectedLayerId={selectedLayerId}
@@ -1374,7 +1405,7 @@ export default function App() {
                   onSetPosePreset={handleSetPosePreset}
                 />
 
-                {!zenMode && (
+                {studioTab === '3d' && !zenMode && (
                   <InspectorPanel
                     layer={selectedLayer}
                     hasAudio={Boolean(project.audio)}
@@ -1382,6 +1413,13 @@ export default function App() {
                     onUpdateSettings={handleUpdateSettings}
                     onUpdateAnimation={handleUpdateAnimation}
                     onSyncAllToMusic={handleSyncAllToMusic}
+                  />
+                )}
+
+                {studioTab === 'title' && !zenMode && (
+                  <AuraTitleEditorPanel
+                    project={project}
+                    onUpdateTitleConfig={handleUpdateTitleConfig}
                   />
                 )}
               </div>

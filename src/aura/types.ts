@@ -389,6 +389,20 @@ export interface CutsceneElement {
   duration?: number; // Exact length in seconds (0.2 to cutscene.duration)
 }
 
+export const AURA_TITLE_ANIMATIONS = ['float', 'pulse', 'shimmer', 'none'] as const;
+export type AuraTitleAnimation = (typeof AURA_TITLE_ANIMATIONS)[number];
+
+export interface AuraTitleConfig {
+  enabled: boolean;
+  text: string;
+  size: number; // 0.5 to 3.0
+  heightOffset: number; // -1.0 to 4.0
+  color: string;
+  glowColor: string;
+  fontStyle: CutsceneFontStyle;
+  animation: AuraTitleAnimation;
+}
+
 export interface AuraCutsceneConfig {
   enabled: boolean;
   tier: CutsceneTier;
@@ -423,6 +437,7 @@ export interface AuraProject {
   levitate?: boolean;
   posePreset?: AuraPosePreset;
   cutscene?: AuraCutsceneConfig;
+  titleConfig?: AuraTitleConfig;
 }
 
 export type CharacterPoseMode = AuraPosePreset | 'tpose' | 'paused';

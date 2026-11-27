@@ -5,6 +5,7 @@ import {
   AURA_FORMAT_VERSION,
   AURA_POSE_PRESETS,
   AURA_TARGET_ENGINE,
+  AURA_TITLE_ANIMATIONS,
   BLEND_MODES,
   CUTSCENE_AUDIO_PRESETS,
   CUTSCENE_FONT_STYLES,
@@ -23,6 +24,7 @@ import {
   type AuraLayer,
   type AuraPosePreset,
   type AuraProject,
+  type AuraTitleConfig,
   type CutsceneCustomAudio,
   type CutsceneElement,
   type CutsceneTier,
@@ -171,6 +173,25 @@ function sanitizeCutsceneConfig(
     audioVolume: clamp(c.audioVolume, 0, 1, 0.9),
     ...(customAudio ? { customAudio } : {}),
     elements,
+  };
+}
+
+function sanitizeTitleConfig(raw: unknown): AuraTitleConfig | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const t = raw as Record<string, unknown>;
+  const text =
+    typeof t.text === 'string'
+      ? t.text.replace(/[<>]/g, '').trim().slice(0, 48)
+      : '';
+  return {
+    enabled: typeof t.enabled === 'boolean' ? t.enabled : true,
+    text,
+    size: clamp(t.size, 0.5, 3.0, 1.0),
+    heightOffset: clamp(t.heightOffset, -1.0, 4.0, 0.55),
+    color: sanitizeColor(t.color, '#ffffff'),
+    glowColor: sanitizeColor(t.glowColor, '#fbbf24'),
+    fontStyle: sanitizeEnum(t.fontStyle, CUTSCENE_FONT_STYLES, 'display'),
+    animation: sanitizeEnum(t.animation, AURA_TITLE_ANIMATIONS, 'float'),
   };
 }
 
@@ -326,6 +347,7 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     audio?.dataUrl.length ?? 0,
     warnings,
   );
+  const titleConfig = sanitizeTitleConfig(obj.titleConfig);
 
   const project: AuraProject = {
     formatVersion: AURA_FORMAT_VERSION,
@@ -349,6 +371,7 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     ...(typeof levitate === 'boolean' ? { levitate } : {}),
     ...(posePreset ? { posePreset } : {}),
     ...(cutscene ? { cutscene } : {}),
+    ...(titleConfig ? { titleConfig } : {}),
   };
 
   return { ok: true, project, warnings };
