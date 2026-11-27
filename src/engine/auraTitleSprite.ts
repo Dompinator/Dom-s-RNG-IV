@@ -85,11 +85,12 @@ export function computeAuraTopHeight(
     }
 
     const s = layer.settings;
+    const objScale = Math.max(0.15, s.objectScale ?? 1.0);
     let extentY = 0.5;
 
     switch (layer.type) {
       case 'light_beams': {
-        const beamH = Math.max(0.5, s.spread);
+        const beamH = Math.max(0.5, s.spread) * objScale;
         if (s.emissionShape === 'sphere') {
           extentY = 1.2 + beamH * 0.75;
         } else {
@@ -99,19 +100,20 @@ export function computeAuraTopHeight(
       }
       case 'energy_spheres':
       case 'distortion_effects':
-        extentY = s.radius;
+        extentY = s.radius * objScale;
         break;
       case 'rotating_rings':
         extentY =
           s.radius *
+            objScale *
             Math.min(
               1.0,
               0.2 + Math.abs(Math.sin(s.tilt + layer.rotation.x + layer.rotation.z)),
             ) +
-          s.thickness;
+          s.thickness * objScale;
         break;
       case 'orbiting_objects':
-        extentY = s.spread * 0.5 + s.size * 0.4 + s.radius * 0.25;
+        extentY = s.spread * 0.5 + 0.4 * objScale + s.radius * 0.25;
         break;
       case 'particle_systems':
       case 'floating_sparks':

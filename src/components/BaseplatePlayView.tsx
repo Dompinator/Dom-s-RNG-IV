@@ -10,17 +10,26 @@ import {
   LogOut,
   Music,
   RotateCcw,
+  Settings,
   Sparkles,
   Users,
   Volume2,
   VolumeX,
+  X,
+  Zap,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { isLikelyLegacyTruncatedAudio } from '../aura/audioEncoder';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
 import { BaseplateWorldEngine } from '../engine/BaseplateWorldEngine';
 import type { SpatialAudioState } from '../engine/spatialAudio';
 import { CutscenePlayerOverlay } from './CutscenePlayerOverlay';
+import {
+  DISABLE_CUTSCENE_ODDS,
+  RollSettingsModal,
+  type RollSettings,
+} from './RollSettingsModal';
 import type { User } from '../firebase';
 import {
   rollAuraFromCatalog,
@@ -36,6 +45,48 @@ import {
   type RemotePlayerState,
 } from '../game/multiplayerSync';
 
+const ROLL_SETTINGS_KEY = 'doms_rng_iv_roll_settings_v1';
+
+function loadRollSettings(): RollSettings {
+  try {
+    const raw = localStorage.getItem(ROLL_SETTINGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<RollSettings>;
+      const minKeep =
+        typeof parsed.minKeepOdds === 'number' && Number.isFinite(parsed.minKeepOdds)
+          ? Math.max(1, Math.min(1_000_000_000_000, Math.round(parsed.minKeepOdds)))
+          : 1;
+      const minCut =
+        typeof parsed.minCutsceneOdds === 'number' && Number.isFinite(parsed.minCutsceneOdds)
+          ? parsed.minCutsceneOdds >= DISABLE_CUTSCENE_ODDS
+            ? DISABLE_CUTSCENE_ODDS
+            : Math.max(1, Math.min(1_000_000_000_000, Math.round(parsed.minCutsceneOdds)))
+          : 1;
+      return {
+        quickRoll: Boolean(parsed.quickRoll),
+        minKeepOdds: minKeep,
+        minCutsceneOdds: minCut,
+      };
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return { quickRoll: false, minKeepOdds: 1, minCutsceneOdds: 1 };
+}
+
+function saveRollSettings(settings: RollSettings): void {
+  try {
+    localStorage.setItem(ROLL_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+interface RolledRevealState {
+  aura: AuraProject;
+  skipped: boolean;
+}
+
 interface BaseplatePlayViewProps {
   catalog: CatalogAuraEntry[];
   storage: StoredAuraEntry[];
@@ -48,7 +99,7 @@ interface BaseplatePlayViewProps {
   onSignOut: () => void;
   onOpenStorage: () => void;
   onOpenRegistry: () => void;
-  onRecordRoll: (rolledProject: AuraProject) => void;
+  onRecordRoll: (rolledProject: AuraProject, keepInStorage?: boolean) => void;
   onEquipAura: (auraId: string | null) => void;
 }
 
@@ -77,11 +128,27 @@ export function BaseplatePlayView({
 
   const [isRolling, setIsRolling] = useState(false);
   const [autoRoll, setAutoRoll] = useState(false);
+  const [rollSettings, setRollSettings] = useState<RollSettings>(() => loadRollSettings());
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [audioState, setAudioState] = useState<SpatialAudioState>('none');
-  const [previewRollName, setPreviewRollName] = useState<string>('');
-  const [rolledReveal, setRolledReveal] = useState<AuraProject | null>(null);
+  const [previewRollAura, setPreviewRollAura] = useState<AuraProject | null>(null);
+  const [rollPreviewTick, setRollPreviewTick] = useState(0);
+  const [rolledReveal, setRolledReveal] = useState<RolledRevealState | null>(null);
   const [activeCutsceneAura, setActiveCutsceneAura] = useState<AuraProject | null>(null);
+
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
+  const rollSettingsRef = useRef(rollSettings);
+  rollSettingsRef.current = rollSettings;
+  const rollTimerRef = useRef<number | null>(null);
+  const skippedFadeTimerRef = useRef<number | null>(null);
+
+  const updateRollSettings = (next: RollSettings) => {
+    rollSettingsRef.current = next;
+    setRollSettings(next);
+    saveRollSettings(next);
+  };
 
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayerState[]>([]);
   const [audibleIds, setAudibleIds] = useState<Set<string>>(() => new Set());
@@ -232,44 +299,119 @@ export function BaseplatePlayView({
     };
   }, [authUser, sessionId]);
 
+  useEffect(() => {
+    return () => {
+      if (rollTimerRef.current !== null) {
+        window.clearTimeout(rollTimerRef.current);
+      }
+      if (skippedFadeTimerRef.current !== null) {
+        window.clearTimeout(skippedFadeTimerRef.current);
+      }
+    };
+  }, []);
+
   const performRoll = () => {
-    if (isRolling || activeCutsceneAura || enabledPool.length === 0) return;
+    const activePool = catalogRef.current.filter((c) => c.enabled);
+    if (isRolling || activeCutsceneAura || activePool.length === 0) return;
+
+    if (rollTimerRef.current !== null) {
+      window.clearTimeout(rollTimerRef.current);
+      rollTimerRef.current = null;
+    }
+    if (skippedFadeTimerRef.current !== null) {
+      window.clearTimeout(skippedFadeTimerRef.current);
+      skippedFadeTimerRef.current = null;
+    }
 
     engineRef.current?.unlockAudio();
     setIsRolling(true);
     setRolledReveal(null);
 
-    let tickCount = 0;
-    const intervalId = window.setInterval(() => {
-      tickCount++;
-      const sample = enabledPool[Math.floor(Math.random() * enabledPool.length)];
-      setPreviewRollName(sample.project.name);
+    const quick = rollSettingsRef.current.quickRoll;
+    const totalDurationMs = quick ? 1000 : 3000;
+    const startMs = performance.now();
+    let lastShownId: string | null = null;
 
-      if (tickCount >= 9) {
-        window.clearInterval(intervalId);
-        const winner = rollAuraFromCatalog(catalog);
+    const pickPreviewAura = (): AuraProject => {
+      const poolNow = catalogRef.current.filter((c) => c.enabled);
+      const source = poolNow.length > 0 ? poolNow : activePool;
+      if (source.length === 1) return source[0].project;
+      let candidate = source[Math.floor(Math.random() * source.length)].project;
+      if (candidate.id === lastShownId) {
+        candidate = source[(source.findIndex((c) => c.project.id === candidate.id) + 1) % source.length].project;
+      }
+      lastShownId = candidate.id;
+      return candidate;
+    };
+
+    const scheduleStep = () => {
+      const elapsed = performance.now() - startMs;
+      const remaining = totalDurationMs - elapsed;
+
+      if (remaining <= 16) {
+        rollTimerRef.current = null;
+        const winner = rollAuraFromCatalog(catalogRef.current);
         setIsRolling(false);
+        setPreviewRollAura(null);
+
         if (winner) {
-          onRecordRoll(winner.project);
-          if (winner.project.cutscene?.enabled) {
+          const { minKeepOdds, minCutsceneOdds } = rollSettingsRef.current;
+          const shouldKeep = winner.project.rarity.baseOdds >= minKeepOdds;
+          const shouldPlayCutscene =
+            shouldKeep &&
+            Boolean(winner.project.cutscene?.enabled) &&
+            winner.project.rarity.baseOdds >= minCutsceneOdds;
+
+          onRecordRoll(winner.project, shouldKeep);
+
+          if (shouldPlayCutscene) {
             setActiveCutsceneAura(winner.project);
           } else {
-            setRolledReveal(winner.project);
+            setRolledReveal({ aura: winner.project, skipped: !shouldKeep });
+            if (!shouldKeep) {
+              skippedFadeTimerRef.current = window.setTimeout(() => {
+                setRolledReveal((curr) =>
+                  curr && curr.skipped && curr.aura.id === winner.project.id
+                    ? null
+                    : curr,
+                );
+                skippedFadeTimerRef.current = null;
+              }, 1150);
+            }
           }
         }
+        return;
       }
-    }, 75);
+
+      setPreviewRollAura(pickPreviewAura());
+      setRollPreviewTick((t) => t + 1);
+
+      const progress = Math.min(1, elapsed / totalDurationMs);
+      const rawInterval = quick
+        ? 45 + Math.pow(progress, 1.8) * 105
+        : 65 + Math.pow(progress, 2.2) * 330;
+      const nextDelay = Math.min(remaining, Math.max(40, Math.round(rawInterval)));
+
+      rollTimerRef.current = window.setTimeout(scheduleStep, nextDelay);
+    };
+
+    scheduleStep();
   };
 
   // Auto-roll loop when toggled on (paused while rolling or cutscene is playing)
   useEffect(() => {
-    if (!autoRoll || isRolling || activeCutsceneAura) return;
+    if (!autoRoll || isRolling || activeCutsceneAura || enabledPool.length === 0) return;
+    const delayMs = rolledReveal?.skipped
+      ? 260
+      : rollSettings.quickRoll
+        ? 420
+        : 850;
     const timer = window.setTimeout(() => {
       performRoll();
-    }, 900);
+    }, delayMs);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRoll, isRolling, activeCutsceneAura, rolledReveal]);
+  }, [autoRoll, isRolling, activeCutsceneAura, rolledReveal, rollSettings.quickRoll, enabledPool.length]);
 
   const uniqueOwned = storage.length;
   const totalOwned = storage.reduce((sum, s) => sum + s.count, 0);
@@ -345,6 +487,11 @@ export function BaseplatePlayView({
                 <div className="mt-1.5 flex items-center gap-1 text-[11px] text-sky-300 truncate">
                   <Music className="w-3 h-3 shrink-0" />
                   <span className="truncate">{equippedAura.audio.fileName}</span>
+                  {isLikelyLegacyTruncatedAudio(equippedAura.audio) && (
+                    <span className="text-[10px] text-amber-300 shrink-0">
+                      (old ~26s clip)
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -550,83 +697,140 @@ export function BaseplatePlayView({
         </div>
       </div>
 
-      {/* Roll Result Reveal Card */}
-      {rolledReveal && !isRolling && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 w-[340px] max-w-[92vw] bg-[#10141f]/95 border border-white/[0.14] rounded-xl p-4 shadow-2xl">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="text-[11px] text-slate-400">Rolled Aura</div>
-              <h3 className="font-display text-lg font-bold text-white leading-tight mt-0.5">
-                {rolledReveal.name}
-              </h3>
-              <div className="flex items-center gap-2 text-xs mt-1">
-                <span
-                  className={`font-semibold ${
-                    RARITY_COLOR_STYLES[rolledReveal.rarity.classification].text
-                  }`}
-                >
-                  {rolledReveal.rarity.classification}
-                </span>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="font-mono-num text-slate-300">
-                  {formatOdds(rolledReveal.rarity.baseOdds)}
-                </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setRolledReveal(null)}
-              className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-white/[0.06] cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
-
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                onEquipAura(rolledReveal.id);
+      {/* Center-Screen Rolling Shuffle Titles (Sol's RNG style) */}
+      {isRolling && previewRollAura && !activeCutsceneAura && (
+        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col items-center justify-center px-6 select-none">
+          <div
+            key={rollPreviewTick}
+            className="animate-roll-title flex flex-col items-center text-center px-12 py-8 bg-[radial-gradient(ellipse_at_center,rgba(5,8,16,0.62)_0%,rgba(5,8,16,0)_72%)]"
+          >
+            <h2
+              className="font-display text-4xl sm:text-6xl font-bold tracking-tight text-balance max-w-2xl"
+              style={{
+                color:
+                  previewRollAura.titleConfig?.color ||
+                  previewRollAura.layers[0]?.color ||
+                  RARITY_COLOR_STYLES[previewRollAura.rarity.classification].accent,
+                textShadow:
+                  '0 4px 28px rgba(0, 0, 0, 0.92), 0 0 26px rgba(0, 0, 0, 0.72)',
               }}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                equippedAuraId === rolledReveal.id
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-              }`}
             >
-              {equippedAuraId === rolledReveal.id ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Equipped</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Equip Now</span>
-                </>
-              )}
-            </button>
-            {rolledReveal.cutscene?.enabled && (
-              <button
-                type="button"
-                onClick={() => setActiveCutsceneAura(rolledReveal)}
-                title="Replay Cutscene"
-                className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-white/[0.07] hover:bg-white/[0.14] border border-white/[0.1] text-xs font-medium text-slate-100 transition-colors cursor-pointer"
+              {previewRollAura.name}
+            </h2>
+            <div
+              className="mt-2 flex items-center gap-2 text-sm sm:text-base font-medium"
+              style={{
+                textShadow: '0 2px 14px rgba(0, 0, 0, 0.95)',
+              }}
+            >
+              <span
+                className={`font-semibold ${
+                  RARITY_COLOR_STYLES[previewRollAura.rarity.classification].text
+                }`}
               >
-                <Film className="w-3.5 h-3.5 text-amber-400" />
-                <span>Cutscene</span>
-              </button>
-            )}
+                {previewRollAura.rarity.classification}
+              </span>
+              <span aria-hidden="true" className="text-slate-500">
+                ·
+              </span>
+              <span className="font-mono-num text-slate-200">
+                {formatOdds(previewRollAura.rarity.baseOdds)}
+              </span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Rolling Tension Indicator */}
-      {isRolling && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 px-5 py-2.5 rounded-lg bg-[#10141f]/95 border border-amber-500/40 text-center shadow-2xl min-w-[240px]">
-          <div className="text-[11px] text-amber-400 font-medium">Rolling...</div>
-          <div className="font-display text-base font-semibold text-white mt-0.5 truncate">
-            {previewRollName || '...'}
+      {/* Center-Screen Roll Result Title Reveal */}
+      {rolledReveal && !isRolling && !activeCutsceneAura && (
+        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col items-center justify-center px-6 select-none">
+          <div className="animate-roll-reveal flex flex-col items-center text-center px-12 py-8 bg-[radial-gradient(ellipse_at_center,rgba(5,8,16,0.68)_0%,rgba(5,8,16,0)_74%)]">
+            <h2
+              className="font-display text-4xl sm:text-6xl font-bold tracking-tight text-balance max-w-2xl"
+              style={{
+                color:
+                  rolledReveal.aura.titleConfig?.color ||
+                  rolledReveal.aura.layers[0]?.color ||
+                  RARITY_COLOR_STYLES[rolledReveal.aura.rarity.classification].accent,
+                textShadow:
+                  '0 4px 32px rgba(0, 0, 0, 0.95), 0 0 28px rgba(0, 0, 0, 0.8)',
+              }}
+            >
+              {rolledReveal.aura.name}
+            </h2>
+
+            <div
+              className="mt-2 flex items-center gap-2 text-sm sm:text-base font-medium"
+              style={{
+                textShadow: '0 2px 14px rgba(0, 0, 0, 0.95)',
+              }}
+            >
+              <span
+                className={`font-semibold ${
+                  RARITY_COLOR_STYLES[rolledReveal.aura.rarity.classification].text
+                }`}
+              >
+                {rolledReveal.aura.rarity.classification}
+              </span>
+              <span aria-hidden="true" className="text-slate-500">
+                ·
+              </span>
+              <span className="font-mono-num text-slate-200">
+                {formatOdds(rolledReveal.aura.rarity.baseOdds)}
+              </span>
+            </div>
+
+            {rolledReveal.skipped ? (
+              <div
+                className="mt-2.5 text-xs font-medium text-slate-400"
+                style={{ textShadow: '0 2px 10px rgba(0, 0, 0, 0.95)' }}
+              >
+                Skipped · Below {formatOdds(rollSettings.minKeepOdds)} minimum keep
+              </div>
+            ) : (
+              <div className="pointer-events-auto mt-5 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onEquipAura(rolledReveal.aura.id)}
+                  className={`flex items-center justify-center gap-1.5 py-2 px-4 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer shadow-lg ${
+                    equippedAuraId === rolledReveal.aura.id
+                      ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/50'
+                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                  }`}
+                >
+                  {equippedAuraId === rolledReveal.aura.id ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Equipped</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Equip Now</span>
+                    </>
+                  )}
+                </button>
+                {rolledReveal.aura.cutscene?.enabled && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveCutsceneAura(rolledReveal.aura)}
+                    title="Replay Cutscene"
+                    className="flex items-center gap-1.5 py-2 px-3.5 rounded-lg bg-[#0f131d]/90 hover:bg-[#192031] border border-white/[0.14] text-xs font-medium text-slate-100 transition-colors whitespace-nowrap cursor-pointer shadow-lg"
+                  >
+                    <Film className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Cutscene</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setRolledReveal(null)}
+                  aria-label="Dismiss rolled title"
+                  className="p-2 rounded-lg bg-[#0f131d]/90 hover:bg-[#192031] border border-white/[0.14] text-slate-300 hover:text-white transition-colors cursor-pointer shadow-lg"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -650,12 +854,31 @@ export function BaseplatePlayView({
       )}
 
       {/* Bottom Center ROLL Action Bar */}
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2.5">
+      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 sm:gap-2.5 max-w-[96vw]">
+        <button
+          type="button"
+          onClick={() =>
+            updateRollSettings({
+              ...rollSettings,
+              quickRoll: !rollSettings.quickRoll,
+            })
+          }
+          title="Quick ROLL: speeds up each roll from 3s to 1s"
+          className={`flex items-center gap-1.5 px-3.5 py-3 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            rollSettings.quickRoll
+              ? 'bg-sky-500/20 border-sky-400/55 text-sky-200'
+              : 'bg-[#0f131d]/95 border-white/[0.1] text-slate-300 hover:bg-[#171d2c]'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5" />
+          <span>Quick ROLL</span>
+        </button>
+
         <button
           type="button"
           onClick={performRoll}
           disabled={isRolling || Boolean(activeCutsceneAura) || enabledPool.length === 0}
-          className="flex items-center gap-2.5 px-8 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.98] disabled:opacity-50 text-slate-950 font-display text-base font-bold tracking-wide shadow-2xl transition-all cursor-pointer"
+          className="flex items-center gap-2.5 px-7 sm:px-8 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.98] disabled:opacity-50 text-slate-950 font-display text-base font-bold tracking-wide shadow-2xl transition-all whitespace-nowrap shrink-0 cursor-pointer"
         >
           <Dices className="w-5 h-5" />
           <span>{isRolling ? 'ROLLING...' : 'ROLL'}</span>
@@ -664,13 +887,30 @@ export function BaseplatePlayView({
         <button
           type="button"
           onClick={() => setAutoRoll((a) => !a)}
-          className={`px-3.5 py-3 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
+          className={`px-3.5 py-3 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
             autoRoll
               ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
               : 'bg-[#0f131d]/95 border-white/[0.1] text-slate-300 hover:bg-[#171d2c]'
           }`}
         >
           {autoRoll ? 'Auto: ON' : 'Auto: OFF'}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Roll Settings"
+          title="Configure Minimum Keep & Minimum Cutscene"
+          className={`flex items-center gap-1.5 px-3.5 py-3 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            settingsOpen ||
+            rollSettings.minKeepOdds > 1 ||
+            rollSettings.minCutsceneOdds > 1
+              ? 'bg-white/[0.12] border-white/25 text-white'
+              : 'bg-[#0f131d]/95 border-white/[0.1] text-slate-300 hover:bg-[#171d2c]'
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          <span className="hidden sm:inline">Settings</span>
         </button>
       </div>
 
@@ -728,11 +968,18 @@ export function BaseplatePlayView({
           aura={activeCutsceneAura}
           initialMuted={audioMuted}
           onComplete={() => {
-            setRolledReveal(activeCutsceneAura);
+            setRolledReveal({ aura: activeCutsceneAura, skipped: false });
             setActiveCutsceneAura(null);
           }}
         />
       )}
+
+      <RollSettingsModal
+        open={settingsOpen}
+        settings={rollSettings}
+        onChange={updateRollSettings}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   );
 }

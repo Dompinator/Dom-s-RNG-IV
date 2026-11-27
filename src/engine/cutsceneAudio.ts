@@ -4,6 +4,7 @@ import {
   type CutsceneAudioPreset,
   type CutsceneTier,
 } from '../aura/types';
+import { toPerceptualGain } from './spatialAudio';
 
 function createNoiseBuffer(ctx: AudioContext, seconds = 3.0): AudioBuffer {
   const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -92,12 +93,12 @@ export class CutsceneAudioEngine {
   public play(cutscene: AuraCutsceneConfig, muted = false, startOffsetSec = 0) {
     this.stop();
     this.muted = muted;
-    this.currentVolume = Math.max(0, Math.min(1, cutscene.audioVolume ?? 0.9));
+    this.currentVolume = toPerceptualGain(cutscene.audioVolume ?? 0.9);
 
     if (cutscene.customAudio?.dataUrl) {
       this.playCustomAudio(
         cutscene.customAudio.dataUrl,
-        cutscene.customAudio.volume,
+        cutscene.customAudio.volume * (cutscene.audioVolume ?? 0.9),
         startOffsetSec,
       );
     }
@@ -170,7 +171,7 @@ export class CutsceneAudioEngine {
   private playCustomAudio(dataUrl: string, vol: number, startOffsetSec: number) {
     try {
       const audioEl = new Audio(dataUrl);
-      audioEl.volume = Math.max(0, Math.min(1, vol));
+      audioEl.volume = toPerceptualGain(vol);
       audioEl.muted = this.muted;
       if (startOffsetSec > 0) {
         audioEl.currentTime = startOffsetSec;

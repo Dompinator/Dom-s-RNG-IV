@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useRef } from 'react';
+import { isLikelyLegacyTruncatedAudio } from '../aura/audioEncoder';
 import { classifyBaseOdds, formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import { importAuraFromFile } from '../aura/storage';
 import type { AuraProject } from '../aura/types';
@@ -536,6 +537,11 @@ export function AuraRegistryModal({
                           <Music className="w-3 h-3" />
                           {p.audio.fileName}
                         </span>
+                        {isLikelyLegacyTruncatedAudio(p.audio) && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-medium text-amber-300">
+                            Old ~26s clip — Replace Song in Studio
+                          </span>
+                        )}
                       </>
                     )}
                     {p.levitate && (

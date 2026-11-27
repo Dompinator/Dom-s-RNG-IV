@@ -102,6 +102,7 @@ export interface LayerAnimationSettings {
 export interface LayerEffectSettings {
   // Shared numeric parameters
   size: number;
+  objectScale?: number;
   intensity: number;
   opacity: number;
   glow: number;

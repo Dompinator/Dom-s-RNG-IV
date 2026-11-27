@@ -275,6 +275,7 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
       },
       settings: {
         size: clamp(setRaw.size, 0.05, 8, 1),
+        objectScale: clamp(setRaw.objectScale, 0.15, 4, 1),
         intensity: clamp(setRaw.intensity, 0, 6, 1.4),
         opacity: clamp(setRaw.opacity, 0, 1, 0.85),
         glow: clamp(setRaw.glow, 0, 5, 1.4),

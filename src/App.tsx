@@ -12,6 +12,7 @@ import { ProjectLibraryModal } from './components/ProjectLibraryModal';
 import { StorageModal } from './components/StorageModal';
 import { TopToolbar, type AppMode } from './components/TopToolbar';
 import { ViewportCanvas } from './components/ViewportCanvas';
+import type { LayerTransformCommitPatch } from './engine/AuraViewportEngine';
 import {
   cloneProjectWithNewId,
   collectUsedTextures,
@@ -742,6 +743,23 @@ export default function App() {
     }));
   };
 
+  const handleCommitLayerTransform = useCallback(
+    (id: string, patch: LayerTransformCommitPatch) => {
+      commitChange((prev) => ({
+        ...prev,
+        layers: prev.layers.map((l) => {
+          if (l.id !== id) return l;
+          return {
+            ...l,
+            ...(patch.position ? { position: patch.position } : {}),
+            ...(patch.settings ? { settings: { ...l.settings, ...patch.settings } } : {}),
+          };
+        }),
+      }));
+    },
+    [commitChange],
+  );
+
   const handleUpdateProjectMeta = (
     patch: Partial<Pick<AuraProject, 'name' | 'description' | 'author'>>,
   ) => {
@@ -1001,29 +1019,33 @@ export default function App() {
   );
 
   const handleRecordRoll = useCallback(
-    (rolledProject: AuraProject) => {
-      const now = new Date().toISOString();
-      const prevStorage = storageRef.current;
-      const idx = prevStorage.findIndex((s) => s.auraId === rolledProject.id);
-      const nextStorage: StoredAuraEntry[] =
-        idx >= 0
-          ? prevStorage.map((s, i) =>
-              i === idx ? { ...s, count: s.count + 1, lastObtainedAt: now } : s,
-            )
-          : [
-              {
-                auraId: rolledProject.id,
-                count: 1,
-                firstObtainedAt: now,
-                lastObtainedAt: now,
-              },
-              ...prevStorage,
-            ];
+    (rolledProject: AuraProject, keepInStorage = true) => {
       const nextRolls = totalRollsRef.current + 1;
+      let nextStorage = storageRef.current;
 
-      storageRef.current = nextStorage;
+      if (keepInStorage) {
+        const now = new Date().toISOString();
+        const prevStorage = storageRef.current;
+        const idx = prevStorage.findIndex((s) => s.auraId === rolledProject.id);
+        nextStorage =
+          idx >= 0
+            ? prevStorage.map((s, i) =>
+                i === idx ? { ...s, count: s.count + 1, lastObtainedAt: now } : s,
+              )
+            : [
+                {
+                  auraId: rolledProject.id,
+                  count: 1,
+                  firstObtainedAt: now,
+                  lastObtainedAt: now,
+                },
+                ...prevStorage,
+              ];
+        storageRef.current = nextStorage;
+        setStorage(nextStorage);
+      }
+
       totalRollsRef.current = nextRolls;
-      setStorage(nextStorage);
       setTotalRolls(nextRolls);
       persistAccountProgression(nextStorage, equippedAuraIdRef.current, nextRolls);
     },
@@ -1400,9 +1422,11 @@ export default function App() {
 
                 <ViewportCanvas
                   project={project}
+                  selectedLayerId={studioTab === '3d' ? selectedLayerId : null}
                   zenMode={zenMode}
                   onToggleZenMode={() => setZenMode((z) => !z)}
                   onSetPosePreset={handleSetPosePreset}
+                  onCommitLayerTransform={handleCommitLayerTransform}
                 />
 
                 {studioTab === '3d' && !zenMode && (

@@ -2,12 +2,15 @@ import {
   Camera,
   ChevronDown,
   ChevronUp,
+  EyeOff,
   Grid3x3,
   Maximize2,
   Minimize2,
+  Move,
   Pause,
   Play,
   RotateCcw,
+  Scaling,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -19,14 +22,20 @@ import type {
   CharacterPoseMode,
 } from '../aura/types';
 import { AURA_POSE_PRESETS } from '../aura/types';
-import { AuraViewportEngine } from '../engine/AuraViewportEngine';
+import {
+  AuraViewportEngine,
+  type LayerTransformCommitPatch,
+  type ViewportGizmoMode,
+} from '../engine/AuraViewportEngine';
 import type { SpatialAudioState } from '../engine/spatialAudio';
 
 interface ViewportCanvasProps {
   project: AuraProject;
+  selectedLayerId?: string | null;
   zenMode: boolean;
   onToggleZenMode: () => void;
   onSetPosePreset: (pose: AuraPosePreset) => void;
+  onCommitLayerTransform?: (layerId: string, patch: LayerTransformCommitPatch) => void;
 }
 
 const POSE_OPTIONS: { value: CharacterPoseMode; label: string }[] = [
@@ -51,12 +60,16 @@ const CAMERA_OPTIONS: { value: CameraPreset; label: string }[] = [
 
 export function ViewportCanvas({
   project,
+  selectedLayerId = null,
   zenMode,
   onToggleZenMode,
   onSetPosePreset,
+  onCommitLayerTransform,
 }: ViewportCanvasProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<AuraViewportEngine | null>(null);
+  const commitTransformRef = useRef(onCommitLayerTransform);
+  commitTransformRef.current = onCommitLayerTransform;
 
   const [contextLost, setContextLost] = useState(false);
   const [playing, setPlaying] = useState(true);
@@ -69,6 +82,8 @@ export function ViewportCanvas({
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [audioState, setAudioState] = useState<SpatialAudioState>('none');
+  const [gizmoMode, setGizmoMode] = useState<ViewportGizmoMode>('translate');
+  const [transformReadout, setTransformReadout] = useState<string | null>(null);
 
   // Initialize Three.js engine once on mount
   useEffect(() => {
@@ -79,9 +94,15 @@ export function ViewportCanvas({
       onContextLost: () => setContextLost(true),
       onContextRestored: () => setContextLost(false),
       onAudioStateChange: (s) => setAudioState(s),
+      onCommitLayerTransform: (layerId, patch) => {
+        commitTransformRef.current?.(layerId, patch);
+      },
+      onTransformReadout: (text) => setTransformReadout(text),
     });
     engineRef.current = engine;
     engine.setProject(project);
+    engine.setSelectedLayerId(selectedLayerId);
+    engine.setGizmoMode(gizmoMode);
 
     return () => {
       engine.dispose();
@@ -125,6 +146,33 @@ export function ViewportCanvas({
     engineRef.current?.setAudioMuted(audioMuted);
   }, [audioMuted]);
 
+  useEffect(() => {
+    engineRef.current?.setSelectedLayerId(selectedLayerId);
+  }, [selectedLayerId]);
+
+  useEffect(() => {
+    engineRef.current?.setGizmoMode(gizmoMode);
+  }, [gizmoMode]);
+
+  // Keyboard shortcuts for Move (G) / Resize (S) / Hide Gizmo (Esc)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'g') {
+        setGizmoMode('translate');
+      } else if (k === 's') {
+        setGizmoMode('scale');
+      } else if (k === 'escape') {
+        setGizmoMode('none');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   // Re-measure canvas when panels toggle
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -156,14 +204,18 @@ export function ViewportCanvas({
         <div className="pointer-events-auto flex items-center gap-2.5 bg-[#0f131d]/90 border border-white/[0.08] rounded-md px-3 py-1.5 text-xs text-slate-400">
           <span className="text-slate-200 font-medium">R6 Preview</span>
           <span aria-hidden="true">·</span>
-          <span>Drag to orbit</span>
-          <span aria-hidden="true">·</span>
-          <span>Scroll to zoom</span>
+          <span>Drag arrows to move</span>
           <span aria-hidden="true">·</span>
           <span className="font-mono-num text-slate-300">
             {project.layers.filter((l) => l.visible).length}/{project.layers.length} active
           </span>
         </div>
+
+        {transformReadout && (
+          <div className="pointer-events-none bg-[#0f131d]/95 border border-amber-500/40 rounded-md px-3 py-1.5 text-xs font-mono-num font-semibold text-amber-300 shadow-xl">
+            {transformReadout}
+          </div>
+        )}
 
         <div className="pointer-events-auto flex items-center gap-1.5">
           {project.audio && audioState === 'suspended' && (
@@ -321,6 +373,50 @@ export function ViewportCanvas({
                 </button>
               ))}
             </div>
+
+            {/* 3D Gizmo Tool (Move Arrows / Object Resize) */}
+            {selectedLayerId && (
+              <div className="flex items-center gap-1 pr-2 border-r border-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('translate')}
+                  title="Move Layer (Red/Green/Blue 3D Arrows) — Shortcut: G"
+                  className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                    gizmoMode === 'translate'
+                      ? 'bg-amber-500 text-slate-950 font-semibold'
+                      : 'bg-white/[0.04] hover:bg-white/[0.1] text-slate-300'
+                  }`}
+                >
+                  <Move className="w-3.5 h-3.5" />
+                  <span>Move</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('scale')}
+                  title="Resize Objects (Keeps Overall Scale the Same) — Shortcut: S"
+                  className={`flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded transition-colors cursor-pointer ${
+                    gizmoMode === 'scale'
+                      ? 'bg-amber-500 text-slate-950 font-semibold'
+                      : 'bg-white/[0.04] hover:bg-white/[0.1] text-slate-300'
+                  }`}
+                >
+                  <Scaling className="w-3.5 h-3.5" />
+                  <span>Resize</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('none')}
+                  title="Hide 3D Arrows (Esc)"
+                  className={`flex items-center justify-center p-1 rounded transition-colors cursor-pointer ${
+                    gizmoMode === 'none'
+                      ? 'bg-white/[0.14] text-white'
+                      : 'bg-white/[0.03] text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  <EyeOff className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Stage / Grid */}
             <div className="flex items-center gap-1">

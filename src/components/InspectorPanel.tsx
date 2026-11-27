@@ -293,12 +293,20 @@ export function InspectorPanel({
             Scale &amp; Radiance
           </h4>
           <SliderRow
-            label={t === 'glowing_materials' ? 'Shell Expand' : 'Overall Size'}
+            label={t === 'glowing_materials' ? 'Shell Expand' : 'Overall Scale'}
             value={s.size}
             min={0.1}
             max={4.0}
             step={0.05}
             onChange={(val) => onUpdateSettings(layer.id, { size: val })}
+          />
+          <SliderRow
+            label="Object Size (Resize)"
+            value={s.objectScale ?? 1.0}
+            min={0.15}
+            max={4.0}
+            step={0.05}
+            onChange={(val) => onUpdateSettings(layer.id, { objectScale: val })}
           />
           <SliderRow
             label="Intensity"
@@ -683,9 +691,12 @@ export function InspectorPanel({
 
         {/* Local Transform Offsets */}
         <section className="space-y-2.5 pb-2">
-          <h4 className="text-xs font-semibold text-slate-200">
-            Local Offset (X / Y / Z)
-          </h4>
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold text-slate-200">
+              Local Offset (X / Y / Z)
+            </h4>
+            <span className="text-[10px] text-slate-500">Or drag 3D arrows</span>
+          </div>
           <div className="grid grid-cols-3 gap-2">
             {(['x', 'y', 'z'] as const).map((axis) => (
               <div key={axis}>

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
@@ -12,6 +13,8 @@ import type {
   AuraProject,
   CameraPreset,
   CharacterPoseMode,
+  LayerEffectSettings,
+  Vec3,
 } from '../aura/types';
 import { AuraTitleSpriteController } from './auraTitleSprite';
 import {
@@ -50,10 +53,19 @@ const CAMERA_PRESETS: Record<
   low: { pos: [2.8, 0.55, 3.6], target: [0, 1.5, 0] },
 };
 
+export type ViewportGizmoMode = 'translate' | 'scale' | 'none';
+
+export interface LayerTransformCommitPatch {
+  position?: Vec3;
+  settings?: Partial<LayerEffectSettings>;
+}
+
 export interface EngineCallbacks {
   onContextLost?: () => void;
   onContextRestored?: () => void;
   onAudioStateChange?: (state: SpatialAudioState) => void;
+  onCommitLayerTransform?: (layerId: string, patch: LayerTransformCommitPatch) => void;
+  onTransformReadout?: (text: string | null) => void;
 }
 
 export class AuraViewportEngine {
@@ -98,6 +110,16 @@ export class AuraViewportEngine {
   private stageDisposables: { dispose: () => void }[] = [];
   private spatialAudio: SpatialAuraAudioController;
   private auraTitle: AuraTitleSpriteController;
+
+  // Interactive 3D Transform Gizmo (Move RGB arrows / Object Resize)
+  private transformControls: TransformControls;
+  private transformHelper: THREE.Object3D;
+  private gizmoProxy: THREE.Group;
+  private selectedLayerId: string | null = null;
+  private gizmoMode: ViewportGizmoMode = 'translate';
+  private isDraggingGizmo = false;
+  private dragStartLayer: AuraLayer | null = null;
+  private liveDragLayerPatch: LayerTransformCommitPatch | null = null;
 
   constructor(container: HTMLElement, callbacks: EngineCallbacks = {}) {
     this.container = container;
@@ -254,6 +276,20 @@ export class AuraViewportEngine {
     });
     this.renderer.domElement.addEventListener('pointerdown', this.handleAudioUnlock);
 
+    this.gizmoProxy = new THREE.Group();
+    this.gizmoProxy.name = 'AuraLayerGizmoProxy';
+
+    this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
+    this.transformControls.setMode('translate');
+    this.transformControls.setSpace('local');
+    this.transformControls.setSize(0.9);
+    this.transformHelper = this.transformControls.getHelper();
+    this.transformHelper.visible = false;
+    this.scene.add(this.transformHelper);
+
+    this.transformControls.addEventListener('dragging-changed', this.handleGizmoDraggingChanged);
+    this.transformControls.addEventListener('objectChange', this.handleGizmoObjectChange);
+
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
 
@@ -291,11 +327,162 @@ export class AuraViewportEngine {
     }
   }
 
+  private handleGizmoDraggingChanged = (event: { value?: unknown }) => {
+    const dragging = Boolean(event.value);
+    this.isDraggingGizmo = dragging;
+    this.controls.enabled = !dragging;
+
+    if (dragging) {
+      this.camTransitionActive = false;
+      const layer = this.currentProject?.layers.find((l) => l.id === this.selectedLayerId);
+      if (layer) {
+        this.dragStartLayer = JSON.parse(JSON.stringify(layer)) as AuraLayer;
+        this.liveDragLayerPatch = null;
+        this.gizmoProxy.position.set(layer.position.x, layer.position.y, layer.position.z);
+        this.gizmoProxy.rotation.set(0, 0, 0);
+        this.gizmoProxy.scale.set(1, 1, 1);
+      }
+    } else {
+      this.callbacks.onTransformReadout?.(null);
+      if (this.dragStartLayer && this.liveDragLayerPatch) {
+        this.callbacks.onCommitLayerTransform?.(
+          this.dragStartLayer.id,
+          this.liveDragLayerPatch,
+        );
+      }
+      this.dragStartLayer = null;
+      this.liveDragLayerPatch = null;
+      this.gizmoProxy.scale.set(1, 1, 1);
+      this.syncGizmoAttachment();
+    }
+  };
+
+  private handleGizmoObjectChange = () => {
+    if (!this.isDraggingGizmo || !this.dragStartLayer) return;
+    const base = this.dragStartLayer;
+
+    if (this.gizmoMode === 'translate') {
+      const nx = Number(THREE.MathUtils.clamp(this.gizmoProxy.position.x, -10, 10).toFixed(2));
+      const ny = Number(THREE.MathUtils.clamp(this.gizmoProxy.position.y, -10, 10).toFixed(2));
+      const nz = Number(THREE.MathUtils.clamp(this.gizmoProxy.position.z, -10, 10).toFixed(2));
+      this.gizmoProxy.position.set(nx, ny, nz);
+      this.liveDragLayerPatch = { position: { x: nx, y: ny, z: nz } };
+      this.callbacks.onTransformReadout?.(
+        `Pos  X: ${nx.toFixed(2)}  Y: ${ny.toFixed(2)}  Z: ${nz.toFixed(2)}`,
+      );
+      return;
+    }
+
+    if (this.gizmoMode === 'scale') {
+      const sx = Math.max(0.1, Math.min(8, this.gizmoProxy.scale.x));
+      const sy = Math.max(0.1, Math.min(8, this.gizmoProxy.scale.y));
+      const sz = Math.max(0.1, Math.min(8, this.gizmoProxy.scale.z));
+      this.gizmoProxy.scale.set(sx, sy, sz);
+
+      const avgUniform = Math.cbrt(sx * sy * sz);
+      const axis =
+        (this.transformControls as unknown as { axis?: string | null }).axis ?? 'XYZ';
+      const baseObjScale = base.settings.objectScale ?? 1.0;
+
+      const nextSettings: Partial<LayerEffectSettings> = {};
+      if (axis === 'X' || axis === 'Z' || axis === 'XZ') {
+        if (base.type === 'glowing_materials') {
+          const val = Number(
+            THREE.MathUtils.clamp(baseObjScale * (axis === 'X' ? sx : sz), 0.15, 4.0).toFixed(2),
+          );
+          nextSettings.objectScale = val;
+          this.callbacks.onTransformReadout?.(`Object Size: ${val.toFixed(2)}x`);
+        } else {
+          const radialFactor = axis === 'X' ? sx : axis === 'Z' ? sz : Math.sqrt(sx * sz);
+          const nextRadius = Number(
+            THREE.MathUtils.clamp(base.settings.radius * radialFactor, 0.1, 10).toFixed(2),
+          );
+          nextSettings.radius = nextRadius;
+          this.callbacks.onTransformReadout?.(`Radius: ${nextRadius.toFixed(2)}`);
+        }
+      } else if (axis === 'Y') {
+        if (
+          base.type === 'energy_spheres' ||
+          base.type === 'distortion_effects' ||
+          base.type === 'glowing_materials'
+        ) {
+          const val = Number(
+            THREE.MathUtils.clamp(baseObjScale * sy, 0.15, 4.0).toFixed(2),
+          );
+          nextSettings.objectScale = val;
+          this.callbacks.onTransformReadout?.(`Object Size: ${val.toFixed(2)}x`);
+        } else {
+          const nextSpread = Number(
+            THREE.MathUtils.clamp(base.settings.spread * sy, 0.1, 12).toFixed(2),
+          );
+          nextSettings.spread = nextSpread;
+          this.callbacks.onTransformReadout?.(`Spread: ${nextSpread.toFixed(2)}`);
+        }
+      } else {
+        const val = Number(
+          THREE.MathUtils.clamp(baseObjScale * avgUniform, 0.15, 4.0).toFixed(2),
+        );
+        nextSettings.objectScale = val;
+        this.callbacks.onTransformReadout?.(
+          `Object Size: ${val.toFixed(2)}x (Overall Scale: ${base.settings.size.toFixed(2)})`,
+        );
+      }
+
+      this.liveDragLayerPatch = { settings: nextSettings };
+    }
+  };
+
+  private syncGizmoAttachment() {
+    if (this.isDraggingGizmo || this.disposed) return;
+
+    const layer = this.currentProject?.layers.find(
+      (l) => l.id === this.selectedLayerId && l.visible,
+    );
+    const canTranslate = layer && layer.type !== 'glowing_materials';
+
+    if (
+      !layer ||
+      this.gizmoMode === 'none' ||
+      (this.gizmoMode === 'translate' && !canTranslate)
+    ) {
+      this.transformControls.detach();
+      this.gizmoProxy.removeFromParent();
+      this.transformHelper.visible = false;
+      return;
+    }
+
+    const anchorObj = this.rig.anchors[layer.anchor] || this.rig.anchors.root;
+    if (this.gizmoProxy.parent !== anchorObj) {
+      anchorObj.add(this.gizmoProxy);
+    }
+    this.gizmoProxy.position.set(layer.position.x, layer.position.y, layer.position.z);
+    this.gizmoProxy.rotation.set(0, 0, 0);
+    this.gizmoProxy.scale.set(1, 1, 1);
+
+    this.transformControls.setMode(this.gizmoMode);
+    this.transformControls.setSpace('local');
+    this.transformControls.attach(this.gizmoProxy);
+    this.transformHelper.visible = true;
+  }
+
+  public setSelectedLayerId(layerId: string | null) {
+    if (this.selectedLayerId === layerId) return;
+    this.selectedLayerId = layerId;
+    this.syncGizmoAttachment();
+  }
+
+  public setGizmoMode(mode: ViewportGizmoMode) {
+    if (this.gizmoMode === mode) return;
+    this.gizmoMode = mode;
+    this.syncGizmoAttachment();
+  }
+
   public setProject(project: AuraProject) {
     this.currentProject = project;
     this.applyEnvironment(project.environment);
     this.syncLayers(project.layers);
     this.spatialAudio.setAuraAudio(this.rig.anchors.root, project.audio);
+    this.syncGizmoAttachment();
   }
 
   public setAudioMuted(muted: boolean) {
@@ -481,7 +668,26 @@ export class AuraViewportEngine {
       for (const layer of this.currentProject.layers) {
         const runtime = this.runtimes.get(layer.id);
         if (runtime) {
-          runtime.update(simDt, this.elapsed, layer, pixelRatio, music);
+          const effectiveLayer =
+            this.isDraggingGizmo &&
+            this.dragStartLayer?.id === layer.id &&
+            this.liveDragLayerPatch
+              ? {
+                  ...layer,
+                  ...(this.liveDragLayerPatch.position
+                    ? { position: this.liveDragLayerPatch.position }
+                    : {}),
+                  ...(this.liveDragLayerPatch.settings
+                    ? {
+                        settings: {
+                          ...layer.settings,
+                          ...this.liveDragLayerPatch.settings,
+                        },
+                      }
+                    : {}),
+                }
+              : layer;
+          runtime.update(simDt, this.elapsed, effectiveLayer, pixelRatio, music);
         }
       }
     }
@@ -510,6 +716,13 @@ export class AuraViewportEngine {
       runtime.dispose();
     }
     this.runtimes.clear();
+
+    this.transformControls.removeEventListener('dragging-changed', this.handleGizmoDraggingChanged);
+    this.transformControls.removeEventListener('objectChange', this.handleGizmoObjectChange);
+    this.transformControls.detach();
+    this.transformControls.dispose();
+    this.transformHelper.removeFromParent();
+    this.gizmoProxy.removeFromParent();
 
     this.auraTitle.dispose();
     this.rig.dispose();

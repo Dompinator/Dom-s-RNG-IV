@@ -11,8 +11,13 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
-import { encodeAudioFileForAura } from '../aura/audioEncoder';
+import { useEffect, useRef, useState } from 'react';
+import {
+  encodeAudioFileForAura,
+  formatAudioDuration,
+  isLikelyLegacyTruncatedAudio,
+  measureAudioDurationSec,
+} from '../aura/audioEncoder';
 import { classifyBaseOdds, formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import {
   ANCHOR_LABELS,
@@ -74,7 +79,25 @@ export function LayerPanel({
 }: LayerPanelProps) {
   const [tab, setTab] = useState<'layers' | 'aura'>('layers');
   const [isEncodingAudio, setIsEncodingAudio] = useState(false);
+  const [songDurationSec, setSongDurationSec] = useState<number | null>(null);
   const songInputRef = useRef<HTMLInputElement | null>(null);
+
+  const audioDataUrl = project.audio?.dataUrl ?? '';
+  useEffect(() => {
+    if (!audioDataUrl) {
+      setSongDurationSec(null);
+      return;
+    }
+    let cancelled = false;
+    void measureAudioDurationSec(audioDataUrl).then((sec) => {
+      if (!cancelled) setSongDurationSec(sec);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [audioDataUrl]);
+
+  const isLegacyShortClip = isLikelyLegacyTruncatedAudio(project.audio);
 
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
   const previewRarity = classifyBaseOdds(project.rarity.baseOdds);
@@ -640,9 +663,17 @@ export function LayerPanel({
                 </label>
 
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-100 truncate">
-                    {project.audio.fileName}
-                  </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-slate-100 truncate">
+                      {project.audio.fileName}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono-num">
+                      {songDurationSec !== null
+                        ? `Length: ${formatAudioDuration(songDurationSec)}`
+                        : 'Measuring length...'}
+                      {project.audio.mimeType === 'audio/mpeg' ? ' · MP3' : ''}
+                    </div>
+                  </div>
                   <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer shrink-0">
                     <input
                       type="checkbox"
@@ -659,6 +690,12 @@ export function LayerPanel({
                   </label>
                 </div>
 
+                {isLegacyShortClip && (
+                  <div className="text-[10px] leading-relaxed text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded px-2.5 py-1.5">
+                    Saved earlier as an old ~26s compressed clip. Click <strong>Replace Song File</strong> above, then click <strong>Send to Roll Pool</strong> to upgrade this aura to the full song.
+                  </div>
+                )}
+
                 <div>
                   <div className="flex justify-between text-[11px] mb-1">
                     <span className="text-slate-400">Volume</span>
@@ -670,7 +707,7 @@ export function LayerPanel({
                     type="range"
                     min={0}
                     max={1}
-                    step={0.02}
+                    step={0.01}
                     value={project.audio.volume}
                     onChange={(e) =>
                       onUpdateAudio({

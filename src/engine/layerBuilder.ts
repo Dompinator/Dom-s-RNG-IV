@@ -236,7 +236,8 @@ export function buildLayerRuntime(
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
-        const r = l.settings.radius * mod;
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+        const r = l.settings.radius * objScale * mod;
         outerMesh.scale.setScalar(r);
         innerMesh.scale.setScalar(r * 0.92);
 
@@ -336,12 +337,13 @@ export function buildLayerRuntime(
         group.rotation.x += l.animation.rotationSpeed.x * spd * dt * 0.35;
 
         const isSphereCage = l.settings.emissionShape === 'sphere';
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
         subRings.forEach((sub, idx) => {
           const factor = isSphereCage ? 1 - idx * 0.06 : 1 - idx * 0.22;
           sub.scale.set(
-            l.settings.radius * factor,
-            1 + l.settings.thickness * 3.0,
-            l.settings.radius * factor,
+            l.settings.radius * objScale * factor,
+            (1 + l.settings.thickness * 3.0) * objScale,
+            l.settings.radius * objScale * factor,
           );
           if (isSphereCage) {
             sub.position.y = 0;
@@ -468,7 +470,8 @@ export function buildLayerRuntime(
             -angle + t * 0.5,
             t * l.animation.rotationSpeed.z + i * 0.4,
           );
-          const s = 0.65 + 0.35 * mod;
+          const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+          const s = (0.65 + 0.35 * mod) * objScale;
           _dummy.scale.setScalar(s);
           _dummy.updateMatrix();
           instanced.setMatrixAt(i, _dummy.matrix);
@@ -600,8 +603,7 @@ export function buildLayerRuntime(
       update: (dt, elapsed, l, pixelRatio, music) => {
         const mod = computeAnimModulation(elapsed, l, music);
         const mSpeed = computeMusicSpeedScale(l, music);
-        group.visible = l.visible;
-        group.position.set(l.position.x, l.position.y, l.position.z);
+        syncBaseTransform(l, mod);
         group.rotation.set(l.rotation.x, group.rotation.y, l.rotation.z + l.settings.tilt);
         if (!l.visible) return;
 
@@ -658,8 +660,12 @@ export function buildLayerRuntime(
 
         mat.uniforms.uColorA.value.set(l.color);
         mat.uniforms.uColorB.value.set(l.secondaryColor);
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
         mat.uniforms.uSize.value =
-          l.settings.size * 26.0 * (l.animation.syncToMusic && music?.active ? 0.85 + mod * 0.25 : 1);
+          Math.max(0.1, l.settings.size) *
+          objScale *
+          26.0 *
+          (l.animation.syncToMusic && music?.active ? 0.85 + mod * 0.25 : 1);
         mat.uniforms.uIntensity.value = l.settings.intensity * l.settings.glow * mod;
         mat.uniforms.uOpacity.value = l.settings.opacity;
         mat.uniforms.uPixelRatio.value = pixelRatio;
@@ -791,7 +797,8 @@ export function buildLayerRuntime(
       const r = l.settings.radius;
       const spr = l.settings.spread;
       const jitter = l.settings.turbulence * 0.35;
-      const w = Math.max(0.01, l.settings.thickness);
+      const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+      const w = Math.max(0.01, l.settings.thickness) * objScale;
       _colorA.set(l.color);
       _colorB.set(l.secondaryColor);
 
@@ -864,6 +871,10 @@ export function buildLayerRuntime(
     };
 
     let timer = 999;
+    let lastR = layer.settings.radius;
+    let lastSpr = layer.settings.spread;
+    let lastThk = layer.settings.thickness;
+    let lastObjS = layer.settings.objectScale ?? 1.0;
     regenerateBolts(layer, layer.settings.intensity);
 
     return {
@@ -880,12 +891,23 @@ export function buildLayerRuntime(
         const dir = l.settings.reverseDirection ? -1 : 1;
         group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt * 0.5;
 
+        const curObjS = l.settings.objectScale ?? 1.0;
+        const sizeChanged =
+          lastR !== l.settings.radius ||
+          lastSpr !== l.settings.spread ||
+          lastThk !== l.settings.thickness ||
+          lastObjS !== curObjS;
+
         const interval = Math.max(0.03, l.settings.lifetime / Math.max(0.25, l.animation.speed));
         timer += dt;
         const beatTrigger =
           Boolean(l.animation.syncToMusic && music?.active && music.beat > 0.62 && timer >= 0.07);
-        if (timer >= interval || beatTrigger) {
+        if (timer >= interval || beatTrigger || sizeChanged) {
           timer = 0;
+          lastR = l.settings.radius;
+          lastSpr = l.settings.spread;
+          lastThk = l.settings.thickness;
+          lastObjS = curObjS;
           regenerateBolts(l, l.settings.intensity * l.settings.glow * mod);
         }
 
@@ -978,9 +1000,10 @@ export function buildLayerRuntime(
         const t = baseClock * l.animation.speed * dir;
         group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt * 0.4;
 
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
         const radius = l.settings.radius;
         const spread = l.settings.spread;
-        const halfW = Math.max(0.02, l.settings.thickness);
+        const halfW = Math.max(0.02, l.settings.thickness) * objScale;
         const turb =
           l.settings.turbulence * (l.animation.syncToMusic && music?.active ? 0.7 + music.beat * 0.9 : 1);
 
@@ -1154,10 +1177,15 @@ export function buildLayerRuntime(
           const flicker = 0.65 + 0.35 * Math.sin(elapsed * 18.0 + seed[i]);
           const s = Math.sin(normAge * Math.PI) * flicker;
 
+          const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
           _dummy.position.set(px[i], py[i], pz[i]);
           _vecA.set(dvx, dvy, dvz).normalize();
           _dummy.quaternion.setFromUnitVectors(_up, _vecA);
-          _dummy.scale.set(s, s * (1 + l.settings.intensity * 0.35), s);
+          _dummy.scale.set(
+            s * objScale,
+            s * objScale * (1 + l.settings.intensity * 0.35),
+            s * objScale,
+          );
           _dummy.updateMatrix();
           instanced.setMatrixAt(i, _dummy.matrix);
 
@@ -1212,7 +1240,8 @@ export function buildLayerRuntime(
         syncBaseTransform(l, mod);
         if (!l.visible) return;
 
-        const r = l.settings.radius * (0.95 + mod * 0.08);
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+        const r = l.settings.radius * objScale * (0.95 + mod * 0.08);
         sphereMesh.scale.setScalar(r);
 
         const baseClock =
@@ -1284,7 +1313,11 @@ export function buildLayerRuntime(
         const mod = computeAnimModulation(elapsed, l, music);
         group.visible = l.visible;
 
-        const shellScale = Math.max(1.01, Math.min(1.35, 1.02 + (l.settings.size - 1.0) * 0.15));
+        const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+        const shellScale = Math.max(
+          1.01,
+          Math.min(1.5, 1.02 + (l.settings.size * objScale - 1.0) * 0.15),
+        );
         for (const s of shellMeshes) {
           s.visible = l.visible;
           s.scale.setScalar(shellScale);
@@ -1343,8 +1376,9 @@ export function buildLayerRuntime(
       const dir = l.settings.reverseDirection ? -1 : 1;
       group.rotation.y += l.animation.rotationSpeed.y * l.animation.speed * mSpeed * dir * dt;
 
-      const r = l.settings.radius;
-      const height = Math.max(0.5, l.settings.spread);
+      const objScale = Math.max(0.15, l.settings.objectScale ?? 1.0);
+      const r = l.settings.radius * objScale;
+      const height = Math.max(0.5, l.settings.spread) * objScale;
       const tilt = l.settings.tilt;
 
       const isSphereBeams = l.settings.emissionShape === 'sphere';

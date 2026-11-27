@@ -9,6 +9,12 @@ export type SpatialAudioState =
   | 'muted'
   | 'error';
 
+export function toPerceptualGain(linear: number): number {
+  const clamped = Math.max(0, Math.min(1, linear));
+  if (clamped <= 0.001) return 0;
+  return Math.pow(clamped, 3.0);
+}
+
 export interface SpatialAudioOptions {
   listener?: THREE.AudioListener;
   bufferCache?: Map<string, AudioBuffer>;
@@ -196,6 +202,8 @@ export class SpatialAuraAudioController {
   private unlockListenersBound = false;
   private disposed = false;
   private playStartCtxTime: number | null = null;
+  private hasStartedCurrentTrack = false;
+  private lastLoopSetting: boolean | null = null;
   private beatTrack: AudioBeatTrack | null = null;
   private beatPhase = 0;
   private smoothLevel = 0;
@@ -289,15 +297,29 @@ export class SpatialAuraAudioController {
     }
 
     this.unbindUnlockListeners();
-    if (!sound.isPlaying && !this.muted && this.distanceFactor > 0.001) {
+    const canAutoStart = this.currentConfig.loop || !this.hasStartedCurrentTrack;
+    if (
+      !sound.isPlaying &&
+      !this.muted &&
+      this.distanceFactor > 0.001 &&
+      canAutoStart
+    ) {
       try {
         sound.play();
         this.playStartCtxTime = sound.context.currentTime;
+        this.hasStartedCurrentTrack = true;
       } catch {
         // Ignore transient WebAudio error
       }
     }
-    this.emitState(this.muted ? 'muted' : sound.isPlaying ? 'playing' : 'suspended');
+    const nextState: SpatialAudioState = this.muted
+      ? 'muted'
+      : sound.isPlaying
+        ? 'playing'
+        : this.hasStartedCurrentTrack && !this.currentConfig.loop
+          ? 'none'
+          : 'suspended';
+    this.emitState(nextState);
   }
 
   public setMuted(muted: boolean) {
@@ -504,16 +526,19 @@ export class SpatialAuraAudioController {
 
     this.applyEffectiveVolume();
 
+    const canAutoStart = this.currentConfig.loop || !this.hasStartedCurrentTrack;
     if (
       !this.muted &&
       this.distanceFactor > 0.01 &&
       this.positionalAudio.buffer &&
-      !this.positionalAudio.isPlaying
+      !this.positionalAudio.isPlaying &&
+      canAutoStart
     ) {
       if (this.positionalAudio.context.state === 'running') {
         try {
           this.positionalAudio.play();
           this.playStartCtxTime = this.positionalAudio.context.currentTime;
+          this.hasStartedCurrentTrack = true;
           this.emitState('playing');
         } catch {
           // Ignore
@@ -522,12 +547,19 @@ export class SpatialAuraAudioController {
         this.bindUnlockListeners();
         this.emitState('suspended');
       }
+    } else if (
+      !this.positionalAudio.isPlaying &&
+      this.hasStartedCurrentTrack &&
+      !this.currentConfig.loop &&
+      this.audioState === 'playing'
+    ) {
+      this.emitState('none');
     }
   }
 
   private applyEffectiveVolume() {
     if (!this.positionalAudio || !this.currentConfig) return;
-    const baseVol = Math.max(0, Math.min(1, this.currentConfig.volume));
+    const baseVol = toPerceptualGain(this.currentConfig.volume);
     const finalVol = this.muted ? 0 : baseVol * this.distanceFactor;
     this.positionalAudio.setVolume(finalVol);
   }
@@ -538,6 +570,10 @@ export class SpatialAuraAudioController {
     sound.setMaxDistance(Math.max(config.refDistance + 1, config.maxDistance));
     sound.setRolloffFactor(Math.max(0.1, config.rolloffFactor));
     sound.setLoop(config.loop);
+    if (this.lastLoopSetting === false && config.loop === true) {
+      this.hasStartedCurrentTrack = false;
+    }
+    this.lastLoopSetting = config.loop;
     this.applyEffectiveVolume();
   }
 
@@ -564,6 +600,8 @@ export class SpatialAuraAudioController {
     this.loadSeq++;
     this.unbindUnlockListeners();
     this.playStartCtxTime = null;
+    this.hasStartedCurrentTrack = false;
+    this.lastLoopSetting = null;
     this.beatTrack = null;
     this.smoothLevel = 0;
     this.smoothBass = 0;

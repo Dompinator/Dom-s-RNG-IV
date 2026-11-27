@@ -33,6 +33,7 @@ export function createDefaultLayer(type: EffectType, customName?: string): AuraL
     },
     settings: {
       size: 1.0,
+      objectScale: 1.0,
       intensity: 1.35,
       opacity: 0.85,
       glow: 1.4,

@@ -1269,7 +1269,7 @@ export function CutsceneEditorWorkspace({
                 type="range"
                 min={0}
                 max={1}
-                step={0.02}
+                step={0.01}
                 value={cutscene.audioVolume}
                 onChange={(e) =>
                   commitCutscene({
