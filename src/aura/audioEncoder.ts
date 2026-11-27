@@ -1,4 +1,4 @@
-import type { AuraAudioConfig } from './types';
+import type { AuraAudioConfig, CutsceneCustomAudio } from './types';
 
 const MAX_RAW_BYTES = 640 * 1024;
 const TARGET_WAV_BYTES = 620 * 1024;
@@ -176,6 +176,73 @@ export async function encodeAudioFileForAura(
         ...baseDefaults,
       },
       optimizedNote: `Compressed "${file.name}" to a ${renderDuration.toFixed(1)}s loop so it syncs across all devices.`,
+    };
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+}
+
+export async function encodeCutsceneAudioFile(
+  file: File,
+  existingVolume = 0.85,
+): Promise<{ customAudio: CutsceneCustomAudio; optimizedNote?: string }> {
+  const isAudio =
+    file.type.startsWith('audio/') ||
+    file.type === 'video/webm' ||
+    /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(file.name);
+  if (!isAudio) {
+    throw new Error('Please choose an audio file (.mp3, .wav, .ogg, .m4a, .webm).');
+  }
+
+  const MAX_CUTSCENE_RAW_BYTES = 240 * 1024;
+  if (file.size <= MAX_CUTSCENE_RAW_BYTES) {
+    const mime = inferAudioMime(file);
+    const dataUrl = await readBlobAsAudioDataUrl(file, mime);
+    if (!/^data:audio\/[a-zA-Z0-9.+_-]+;base64,/.test(dataUrl)) {
+      throw new Error('Unsupported audio encoding format.');
+    }
+    return {
+      customAudio: {
+        fileName: file.name.slice(0, 96),
+        mimeType: mime,
+        dataUrl,
+        volume: existingVolume,
+      },
+    };
+  }
+
+  const arrayBuf = await file.arrayBuffer();
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const ctx = new AudioCtx();
+  try {
+    const decoded = await ctx.decodeAudioData(arrayBuf.slice(0));
+    const targetSampleRate = 14000;
+    const targetWavBytes = 235 * 1024;
+    const maxSamples = Math.floor((targetWavBytes - 44) / 2);
+    const renderDuration = Math.min(decoded.duration, maxSamples / targetSampleRate, 8.0);
+    const frameCount = Math.max(1, Math.floor(renderDuration * targetSampleRate));
+
+    const offline = new OfflineAudioContext(1, frameCount, targetSampleRate);
+    const src = offline.createBufferSource();
+    src.buffer = decoded;
+    src.connect(offline.destination);
+    src.start(0, 0, renderDuration);
+
+    const rendered = await offline.startRendering();
+    const channelData = rendered.getChannelData(0);
+    const wavBlob = encodeMonoWav(channelData, targetSampleRate);
+    const dataUrl = await readBlobAsAudioDataUrl(wavBlob, 'audio/wav');
+
+    return {
+      customAudio: {
+        fileName: file.name.slice(0, 96),
+        mimeType: 'audio/wav',
+        dataUrl,
+        volume: existingVolume,
+      },
+      optimizedNote: `Compressed cutscene SFX "${file.name}" (${renderDuration.toFixed(1)}s) for cloud sync.`,
     };
   } finally {
     await ctx.close().catch(() => {});

@@ -41,6 +41,28 @@ service cloud.firestore {
       );
     }
 
+    function isValidAuraPoseAndCutscene(proj) {
+      return (!('posePreset' in proj) || proj.posePreset in [
+          'idle', 'levitate', 'meditate', 'crossed_arms', 'sword_stance', 'ascension', 'throne'
+        ])
+        && (!('cutscene' in proj) || (
+          proj.cutscene is map
+          && proj.cutscene.enabled is bool
+          && proj.cutscene.tier in ['epic', 'legendary_mythic']
+          && proj.cutscene.duration is number && proj.cutscene.duration >= 1 && proj.cutscene.duration <= 10
+          && proj.cutscene.headlineText is string && proj.cutscene.headlineText.size() <= 80
+          && proj.cutscene.elements is list && proj.cutscene.elements.size() <= 24
+          && (proj.cutscene.elements.size() == 0 || proj.cutscene.elements[0] is map)
+          && (!('customAudio' in proj.cutscene) || (
+            proj.cutscene.customAudio is map
+            && proj.cutscene.customAudio.dataUrl is string
+            && proj.cutscene.customAudio.dataUrl.size() <= 450000
+            && proj.cutscene.customAudio.fileName is string
+            && proj.cutscene.customAudio.fileName.size() <= 96
+          ))
+        ));
+    }
+
     function isValidRollPoolAura(data, auraId) {
       return data.keys().hasAll([
           'id', 'name', 'description', 'enabled', 'baseOdds',
@@ -70,6 +92,7 @@ service cloud.firestore {
           && data.project.audio.fileName.size() <= 96
         ))
         && (!('levitate' in data.project) || data.project.levitate is bool)
+        && isValidAuraPoseAndCutscene(data.project)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -119,6 +142,40 @@ service cloud.firestore {
           && data.storage[0].firstObtainedAt is string && data.storage[0].firstObtainedAt.size() <= 64
           && data.storage[0].lastObtainedAt is string && data.storage[0].lastObtainedAt.size() <= 64
         ))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserProject(data, userId, projectId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'name', 'description',
+          'classification', 'baseOdds', 'project', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'name', 'description',
+          'classification', 'baseOdds', 'project', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == projectId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == userId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 64
+        && data.description is string && data.description.size() <= 240
+        && data.classification in ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Mythic']
+        && data.baseOdds is number && data.baseOdds >= 1 && data.baseOdds <= 1000000000000
+        && data.project is map
+        && data.project.keys().hasAll(['id', 'name', 'layers', 'rarity'])
+        && data.project.layers is list && data.project.layers.size() <= 64
+        && (data.project.layers.size() == 0 || data.project.layers[0] is map)
+        && (!('audio' in data.project) || (
+          data.project.audio is map
+          && data.project.audio.dataUrl is string
+          && data.project.audio.dataUrl.size() <= 920000
+          && data.project.audio.fileName is string
+          && data.project.audio.fileName.size() <= 96
+        ))
+        && (!('levitate' in data.project) || data.project.levitate is bool)
+        && isValidAuraPoseAndCutscene(data.project)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -205,6 +262,46 @@ service cloud.firestore {
         ]);
 
       allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /projects/{projectId} {
+        allow get: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/accounts/$(userId));
+
+        allow list: if isValidId(userId)
+          && isOwner(userId)
+          && request.query.limit is int
+          && request.query.limit >= 1
+          && request.query.limit <= 200;
+
+        allow create: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && isValidUserProject(incoming(), userId, projectId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/accounts/$(userId));
+
+        allow update: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && isValidUserProject(incoming(), userId, projectId)
+          && incoming().id == existing().id
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'description', 'classification', 'baseOdds', 'project', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/accounts/$(userId));
+
+        allow delete: if isValidId(userId)
+          && isValidId(projectId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/accounts/$(userId));
+      }
     }
 
     match /admins/{userId} {

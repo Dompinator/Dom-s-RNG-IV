@@ -3,15 +3,26 @@ import {
   ANCHOR_POINTS,
   ANIMATION_MODES,
   AURA_FORMAT_VERSION,
+  AURA_POSE_PRESETS,
   AURA_TARGET_ENGINE,
   BLEND_MODES,
+  CUTSCENE_AUDIO_PRESETS,
+  CUTSCENE_MOTIONS,
+  CUTSCENE_PHASES,
+  CUTSCENE_SHAPES,
+  CUTSCENE_TIERS,
   EFFECT_TYPES,
   EMISSION_SHAPES,
   ORBITER_SHAPES,
+  POSE_PRESET_META,
   TEXTURE_REFS,
   type AuraAudioConfig,
+  type AuraCutsceneConfig,
   type AuraLayer,
+  type AuraPosePreset,
   type AuraProject,
+  type CutsceneCustomAudio,
+  type CutsceneElement,
   type Vec3,
 } from './types';
 
@@ -50,6 +61,89 @@ function sanitizeVec3(v: unknown, min: number, max: number, fallback: Vec3): Vec
     x: clamp(rec.x, min, max, fallback.x),
     y: clamp(rec.y, min, max, fallback.y),
     z: clamp(rec.z, min, max, fallback.z),
+  };
+}
+
+function isSafeAudioDataUrl(rawUrl: string, maxLength: number): boolean {
+  return (
+    rawUrl.length > 0 &&
+    rawUrl.length <= maxLength &&
+    /^data:audio\/[a-zA-Z0-9.+_-]+(?:;[a-zA-Z0-9.=_-]+)*;base64,[A-Za-z0-9+/=]+$/.test(
+      rawUrl,
+    )
+  );
+}
+
+function sanitizeCutsceneConfig(
+  raw: unknown,
+  existingAudioLen: number,
+  warnings: string[],
+): AuraCutsceneConfig | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const c = raw as Record<string, unknown>;
+  const tier = sanitizeEnum(c.tier, CUTSCENE_TIERS, 'legendary_mythic');
+  const rawElements = Array.isArray(c.elements) ? c.elements.slice(0, 24) : [];
+  if (Array.isArray(c.elements) && c.elements.length > 24) {
+    warnings.push('Cutscene element count capped at 24.');
+  }
+
+  const elements: CutsceneElement[] = [];
+  for (let i = 0; i < rawElements.length; i++) {
+    const item = rawElements[i];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const el = item as Record<string, unknown>;
+    elements.push({
+      id: sanitizeString(el.id, `cut_${i}_${Math.random().toString(36).slice(2, 6)}`, 48),
+      name: sanitizeString(el.name, `Shape ${i + 1}`, 48),
+      shape: sanitizeEnum(el.shape, CUTSCENE_SHAPES, 'four_point_star'),
+      visible: typeof el.visible === 'boolean' ? el.visible : true,
+      phase: sanitizeEnum(el.phase, CUTSCENE_PHASES, 'all'),
+      motion: sanitizeEnum(el.motion, CUTSCENE_MOTIONS, 'spin_cw'),
+      color: sanitizeColor(el.color, '#fbbf24'),
+      secondaryColor: sanitizeColor(el.secondaryColor, '#38bdf8'),
+      x: clamp(el.x, -50, 50, 0),
+      y: clamp(el.y, -50, 50, 0),
+      size: clamp(el.size, 0.2, 3.0, 1.0),
+      speed: clamp(el.speed, 0, 4.0, 1.2),
+      opacity: clamp(el.opacity, 0.05, 1.0, 0.9),
+      glow: clamp(el.glow, 0, 2.5, 1.4),
+      count: Math.round(clamp(el.count, 1, 24, 6)),
+      rotation: clamp(el.rotation, -180, 180, 0),
+    });
+  }
+
+  let customAudio: CutsceneCustomAudio | undefined;
+  if (c.customAudio && typeof c.customAudio === 'object' && !Array.isArray(c.customAudio)) {
+    const ca = c.customAudio as Record<string, unknown>;
+    const rawUrl = typeof ca.dataUrl === 'string' ? ca.dataUrl.trim() : '';
+    const maxRemaining = Math.max(0, 880_000 - existingAudioLen);
+    const maxAllowed = Math.min(350_000, maxRemaining);
+    if (maxAllowed > 0 && isSafeAudioDataUrl(rawUrl, maxAllowed)) {
+      customAudio = {
+        fileName: sanitizeString(ca.fileName, 'cutscene-sfx.audio', 96),
+        mimeType: sanitizeString(ca.mimeType, 'audio/mpeg', 48),
+        dataUrl: rawUrl,
+        volume: clamp(ca.volume, 0, 1, 0.85),
+      };
+    } else if (rawUrl.length > 0) {
+      warnings.push('Ignored oversized or unsupported cutscene custom audio payload.');
+    }
+  }
+
+  return {
+    enabled: typeof c.enabled === 'boolean' ? c.enabled : true,
+    tier,
+    duration: clamp(c.duration, 1.0, 10.0, tier === 'epic' ? 2.5 : 5.6),
+    primaryColor: sanitizeColor(c.primaryColor, '#fbbf24'),
+    secondaryColor: sanitizeColor(c.secondaryColor, '#38bdf8'),
+    backgroundColor: sanitizeColor(c.backgroundColor, '#020308'),
+    headlineText: sanitizeString(c.headlineText, '', 80),
+    shakeIntensity: clamp(c.shakeIntensity, 0, 2.5, tier === 'epic' ? 0.75 : 1.5),
+    flashIntensity: clamp(c.flashIntensity, 0, 2.5, tier === 'epic' ? 1.0 : 1.5),
+    audioPreset: sanitizeEnum(c.audioPreset, CUTSCENE_AUDIO_PRESETS, 'cosmic_sub_drop'),
+    audioVolume: clamp(c.audioVolume, 0, 1, 0.9),
+    ...(customAudio ? { customAudio } : {}),
+    elements,
   };
 }
 
@@ -165,12 +259,7 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
   if (obj.audio && typeof obj.audio === 'object' && !Array.isArray(obj.audio)) {
     const aRaw = obj.audio as Record<string, unknown>;
     const rawUrl = typeof aRaw.dataUrl === 'string' ? aRaw.dataUrl.trim() : '';
-    const isSafeAudioUrl =
-      rawUrl.length > 0 &&
-      rawUrl.length <= 920_000 &&
-      /^data:audio\/[a-zA-Z0-9.+_-]+(?:;[a-zA-Z0-9.=_-]+)*;base64,[A-Za-z0-9+/=]+$/.test(
-        rawUrl,
-      );
+    const isSafeAudioUrl = isSafeAudioDataUrl(rawUrl, 920_000);
 
     if (isSafeAudioUrl) {
       audio = {
@@ -187,6 +276,29 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
       warnings.push('Ignored unsupported or oversized aura audio payload.');
     }
   }
+
+  let posePreset: AuraPosePreset | undefined;
+  if (
+    typeof obj.posePreset === 'string' &&
+    (AURA_POSE_PRESETS as readonly string[]).includes(obj.posePreset)
+  ) {
+    posePreset = obj.posePreset as AuraPosePreset;
+  } else if (obj.levitate === true) {
+    posePreset = 'levitate';
+  }
+
+  const levitate =
+    posePreset !== undefined
+      ? POSE_PRESET_META[posePreset].floats
+      : typeof obj.levitate === 'boolean'
+        ? obj.levitate
+        : undefined;
+
+  const cutscene = sanitizeCutsceneConfig(
+    obj.cutscene,
+    audio?.dataUrl.length ?? 0,
+    warnings,
+  );
 
   const project: AuraProject = {
     formatVersion: AURA_FORMAT_VERSION,
@@ -207,7 +319,9 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
     layers,
     textures: Array.from(new Set(layers.map((l) => l.textureRef))),
     ...(audio ? { audio } : {}),
-    ...(typeof obj.levitate === 'boolean' ? { levitate: obj.levitate } : {}),
+    ...(typeof levitate === 'boolean' ? { levitate } : {}),
+    ...(posePreset ? { posePreset } : {}),
+    ...(cutscene ? { cutscene } : {}),
   };
 
   return { ok: true, project, warnings };

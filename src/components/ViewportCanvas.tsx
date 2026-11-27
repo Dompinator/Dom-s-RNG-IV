@@ -13,10 +13,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type {
+  AuraPosePreset,
   AuraProject,
   CameraPreset,
   CharacterPoseMode,
 } from '../aura/types';
+import { AURA_POSE_PRESETS } from '../aura/types';
 import { AuraViewportEngine } from '../engine/AuraViewportEngine';
 import type { SpatialAudioState } from '../engine/spatialAudio';
 
@@ -24,12 +26,17 @@ interface ViewportCanvasProps {
   project: AuraProject;
   zenMode: boolean;
   onToggleZenMode: () => void;
-  onSetLevitate: (levitate: boolean) => void;
+  onSetPosePreset: (pose: AuraPosePreset) => void;
 }
 
 const POSE_OPTIONS: { value: CharacterPoseMode; label: string }[] = [
   { value: 'idle', label: 'Idle' },
   { value: 'levitate', label: 'Levitate' },
+  { value: 'meditate', label: 'Meditate' },
+  { value: 'crossed_arms', label: 'Crossed' },
+  { value: 'sword_stance', label: 'Blade' },
+  { value: 'ascension', label: 'Ascend' },
+  { value: 'throne', label: 'Throne' },
   { value: 'tpose', label: 'T-Pose' },
   { value: 'paused', label: 'Freeze' },
 ];
@@ -46,7 +53,7 @@ export function ViewportCanvas({
   project,
   zenMode,
   onToggleZenMode,
-  onSetLevitate,
+  onSetPosePreset,
 }: ViewportCanvasProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<AuraViewportEngine | null>(null);
@@ -55,7 +62,7 @@ export function ViewportCanvas({
   const [playing, setPlaying] = useState(true);
   const [timeScale, setTimeScale] = useState(1.0);
   const [poseMode, setPoseMode] = useState<CharacterPoseMode>(
-    project.levitate ? 'levitate' : 'idle',
+    project.posePreset ?? (project.levitate ? 'levitate' : 'idle'),
   );
   const [showGrid, setShowGrid] = useState(true);
   const [showStage, setShowStage] = useState(true);
@@ -96,13 +103,15 @@ export function ViewportCanvas({
     engineRef.current?.setTimeScale(timeScale);
   }, [timeScale]);
 
-  // Sync poseMode when project.levitate changes or project switches
+  // Sync poseMode when project.posePreset or project.levitate changes or project switches
   useEffect(() => {
+    const resolved: AuraPosePreset =
+      project.posePreset ?? (project.levitate ? 'levitate' : 'idle');
     setPoseMode((curr) => {
-      if (project.levitate) return 'levitate';
-      return curr === 'levitate' ? 'idle' : curr;
+      if (curr === 'tpose' || curr === 'paused') return curr;
+      return resolved;
     });
-  }, [project.id, project.levitate]);
+  }, [project.id, project.posePreset, project.levitate]);
 
   useEffect(() => {
     engineRef.current?.setPoseMode(poseMode);
@@ -273,17 +282,17 @@ export function ViewportCanvas({
             {/* R6 Pose */}
             <div className="flex items-center gap-1 pr-2 border-r border-white/[0.08]">
               <span className="text-[11px] text-slate-500 mr-1 hidden sm:inline">Pose</span>
-              <div className="flex items-center bg-black/30 rounded-md p-0.5">
+              <div className="flex flex-wrap items-center bg-black/30 rounded-md p-0.5 gap-0.5">
                 {POSE_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
                     onClick={() => {
                       setPoseMode(opt.value);
-                      if (opt.value === 'levitate') {
-                        onSetLevitate(true);
-                      } else if (opt.value === 'idle') {
-                        onSetLevitate(false);
+                      if (
+                        (AURA_POSE_PRESETS as readonly string[]).includes(opt.value)
+                      ) {
+                        onSetPosePreset(opt.value as AuraPosePreset);
                       }
                     }}
                     className={`px-2 py-1 text-[11px] font-medium rounded whitespace-nowrap transition-colors cursor-pointer ${

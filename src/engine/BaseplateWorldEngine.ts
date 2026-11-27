@@ -6,7 +6,12 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { RARITY_COLOR_STYLES } from '../aura/rarity';
 import { createContactShadowTexture } from '../aura/textures';
-import type { AuraLayer, AuraProject } from '../aura/types';
+import {
+  POSE_PRESET_META,
+  type AuraLayer,
+  type AuraPosePreset,
+  type AuraProject,
+} from '../aura/types';
 import type { CatalogAuraEntry } from '../game/gameRegistry';
 import type {
   LocalPlayerTransform,
@@ -953,20 +958,26 @@ export class BaseplateWorldEngine {
     (this.contactShadow.material as THREE.MeshBasicMaterial).opacity =
       0.65 * shadowScale;
 
-    // 4. Update R6 Animation Pose (respecting aura levitate mode in-game)
-    const isLevitate = Boolean(this.equippedAura?.levitate);
+    // 4. Update R6 Animation Pose (respecting custom aura posePreset & levitate mode in-game)
+    const activePosePreset: AuraPosePreset =
+      this.equippedAura?.posePreset ??
+      (this.equippedAura?.levitate ? 'levitate' : 'idle');
+    const isFloatingPose =
+      POSE_PRESET_META[activePosePreset]?.floats ||
+      Boolean(this.equippedAura?.levitate);
+
     if (!this.isGrounded) {
       this.currentPose = 'jump';
       this.currentMoveSpeed = 1;
       this.rig.update(this.elapsed, 'jump');
     } else if (isMoving) {
-      this.currentPose = isLevitate ? 'levitate_walk' : 'walk';
+      this.currentPose = isFloatingPose ? 'levitate_walk' : 'walk';
       this.currentMoveSpeed = sprinting ? 1.25 : 0.95;
       this.rig.update(this.elapsed, this.currentPose, this.currentMoveSpeed);
     } else {
-      this.currentPose = isLevitate ? 'levitate' : 'idle';
+      this.currentPose = isFloatingPose ? 'levitate' : 'idle';
       this.currentMoveSpeed = 1;
-      this.rig.update(this.elapsed, this.currentPose);
+      this.rig.update(this.elapsed, activePosePreset);
     }
 
     // 5. Keep Shadows & Rim Light centered on player
@@ -1041,7 +1052,11 @@ export class BaseplateWorldEngine {
       remote.contactShadow.scale.setScalar(rShadowScale);
       remote.shadowMat.opacity = 0.65 * rShadowScale;
 
-      remote.rig.update(this.elapsed, remote.targetPose, remote.targetMoveSpeed);
+      const remoteStandingPose =
+        remote.targetPose === 'idle' || remote.targetPose === 'levitate'
+          ? (remote.equippedAura?.posePreset ?? remote.targetPose)
+          : remote.targetPose;
+      remote.rig.update(this.elapsed, remoteStandingPose, remote.targetMoveSpeed);
 
       remote.nameplate.position.set(
         remote.currentPos.x,

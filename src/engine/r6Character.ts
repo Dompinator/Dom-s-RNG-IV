@@ -208,6 +208,14 @@ export function createR6Character(): R6Rig {
   ) => {
     if (pose === 'paused') return;
 
+    // Reset root & limb offsets each frame so switching poses never leaves stale rotations/positions
+    bodyRoot.rotation.set(0, 0, 0);
+    head.position.set(0, 0.52, 0);
+    leftArm.position.set(0.78, 0.45, 0);
+    rightArm.position.set(-0.78, 0.45, 0);
+    leftLeg.position.set(0.26, 1.0, 0);
+    rightLeg.position.set(-0.26, 1.0, 0);
+
     if (pose === 'jump') {
       bodyRoot.position.set(0, 0, 0);
       torso.position.set(0, 1.5, 0);
@@ -237,7 +245,6 @@ export function createR6Character(): R6Rig {
 
     if (pose === 'tpose') {
       bodyRoot.position.set(0, 0, 0);
-      bodyRoot.rotation.set(0, 0, 0);
       torso.position.set(0, 1.5, 0);
       torso.rotation.set(0, 0, 0);
       head.rotation.set(0, 0, 0);
@@ -272,6 +279,80 @@ export function createR6Character(): R6Rig {
       rightArm.rotation.set(0.15, 0, -0.28 - Math.sin(elapsed * 2.1) * 0.06);
       leftLeg.rotation.set(0.18 + Math.sin(elapsed * 1.8) * 0.05, 0, 0.05);
       rightLeg.rotation.set(0.28 + Math.cos(elapsed * 1.8) * 0.05, 0, -0.05);
+      return;
+    }
+
+    if (pose === 'meditate') {
+      const hover = Math.sin(elapsed * 1.8) * 0.16 + 0.62;
+      const breath = Math.sin(elapsed * 1.6);
+      bodyRoot.position.set(0, hover, 0);
+      torso.position.set(0, 1.38 + breath * 0.02, 0);
+      torso.rotation.set(0.03, 0, 0);
+      head.rotation.set(-0.14 + breath * 0.03, 0, 0);
+      leftArm.position.set(0.74, 0.42, 0.06);
+      rightArm.position.set(-0.74, 0.42, 0.06);
+      leftArm.rotation.set(-0.55, 0.25, -0.32);
+      rightArm.rotation.set(-0.55, -0.25, 0.32);
+      leftLeg.position.set(0.32, 0.92, 0.08);
+      rightLeg.position.set(-0.32, 0.92, 0.08);
+      leftLeg.rotation.set(-1.35, -0.55, 0.42);
+      rightLeg.rotation.set(-1.35, 0.55, -0.42);
+      return;
+    }
+
+    if (pose === 'crossed_arms') {
+      const breath = Math.sin(elapsed * 1.7);
+      bodyRoot.position.set(0, 0, 0);
+      torso.position.set(0, 1.5 + breath * 0.014, 0);
+      torso.rotation.set(-0.04, 0.06, 0);
+      head.rotation.set(0.05, -0.06 + Math.sin(elapsed * 0.6) * 0.05, 0);
+      leftArm.position.set(0.7, 0.42, 0.16);
+      rightArm.position.set(-0.7, 0.42, 0.2);
+      leftArm.rotation.set(-1.12, 0.58, -0.78);
+      rightArm.rotation.set(-1.18, -0.58, 0.78);
+      leftLeg.rotation.set(0, 0.05, 0.07);
+      rightLeg.rotation.set(0.06, -0.05, -0.07);
+      return;
+    }
+
+    if (pose === 'sword_stance') {
+      const pulse = Math.sin(elapsed * 2.2);
+      bodyRoot.position.set(0, 0, 0);
+      torso.position.set(0, 1.44 + pulse * 0.015, 0);
+      torso.rotation.set(0.14, -0.38, 0);
+      head.rotation.set(-0.08, 0.34, 0);
+      // Right arm holds invisible blade forward/up at combat angle, left arm counterbalances back
+      rightArm.rotation.set(-1.18 + pulse * 0.04, 0.18, -0.32);
+      leftArm.rotation.set(0.45, 0, 0.42 + pulse * 0.03);
+      leftLeg.rotation.set(-0.28, 0, 0.1);
+      rightLeg.rotation.set(0.32, 0, -0.1);
+      return;
+    }
+
+    if (pose === 'ascension') {
+      const soar = Math.sin(elapsed * 2.3) * 0.18 + 0.78;
+      bodyRoot.position.set(0, soar, 0);
+      torso.position.set(0, 1.5, 0);
+      torso.rotation.set(-0.18 + Math.sin(elapsed * 1.3) * 0.03, 0, 0);
+      head.rotation.set(-0.34, Math.sin(elapsed * 0.7) * 0.04, 0);
+      leftArm.rotation.set(-0.25, 0, 1.05 + Math.sin(elapsed * 2.3) * 0.08);
+      rightArm.rotation.set(-0.25, 0, -1.05 - Math.sin(elapsed * 2.3) * 0.08);
+      leftLeg.rotation.set(0.16, 0, 0.12);
+      rightLeg.rotation.set(0.32, 0, -0.08);
+      return;
+    }
+
+    if (pose === 'throne') {
+      const hover = Math.sin(elapsed * 1.5) * 0.1 + 0.56;
+      bodyRoot.position.set(0, hover, 0);
+      torso.position.set(0, 1.46, 0);
+      torso.rotation.set(-0.12, 0.04, 0);
+      head.rotation.set(0.1, -0.05 + Math.sin(elapsed * 0.6) * 0.06, 0.04);
+      // Rested sovereign pose: one arm propped lazily, other extended on armrest
+      leftArm.rotation.set(-0.55, 0, 0.36);
+      rightArm.rotation.set(-0.78, -0.18, -0.22);
+      leftLeg.rotation.set(-1.25, 0.08, 0.1);
+      rightLeg.rotation.set(-0.62, -0.06, -0.08);
       return;
     }
 

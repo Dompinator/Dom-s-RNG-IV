@@ -61,7 +61,7 @@ function stripUndefinedDeep<T>(value: T): T {
   return value;
 }
 
-function buildSanitizedProject(project: AuraProject, safeId: string): AuraProject {
+export function buildSanitizedProject(project: AuraProject, safeId: string): AuraProject {
   const cleanName = project.name.trim().slice(0, 64) || 'Untitled Aura';
   const cleanDesc = (project.description ?? '').slice(0, 240);
   const layers = project.layers.slice(0, 64);
@@ -77,6 +77,33 @@ function buildSanitizedProject(project: AuraProject, safeId: string): AuraProjec
         }
       : undefined;
 
+  let safeCutscene = project.cutscene;
+  if (safeCutscene) {
+    const audioLen = safeAudio?.dataUrl.length ?? 0;
+    const maxCutsceneCustom = Math.min(350_000, Math.max(0, 880_000 - audioLen));
+    const hasSafeCustomAudio =
+      safeCutscene.customAudio &&
+      typeof safeCutscene.customAudio.dataUrl === 'string' &&
+      safeCutscene.customAudio.dataUrl.length > 0 &&
+      safeCutscene.customAudio.dataUrl.length <= maxCutsceneCustom;
+
+    safeCutscene = {
+      ...safeCutscene,
+      headlineText: (safeCutscene.headlineText ?? '').slice(0, 80),
+      elements: (safeCutscene.elements ?? []).slice(0, 24),
+      ...(hasSafeCustomAudio
+        ? {
+            customAudio: {
+              ...safeCutscene.customAudio!,
+              fileName:
+                safeCutscene.customAudio!.fileName.slice(0, 96) ||
+                'cutscene-sfx.audio',
+            },
+          }
+        : { customAudio: undefined }),
+    };
+  }
+
   return stripUndefinedDeep({
     ...project,
     id: safeId,
@@ -87,6 +114,8 @@ function buildSanitizedProject(project: AuraProject, safeId: string): AuraProjec
     textures: collectUsedTextures(layers),
     ...(safeAudio ? { audio: safeAudio } : { audio: undefined }),
     ...(typeof project.levitate === 'boolean' ? { levitate: project.levitate } : {}),
+    ...(project.posePreset ? { posePreset: project.posePreset } : {}),
+    ...(safeCutscene ? { cutscene: safeCutscene } : { cutscene: undefined }),
   });
 }
 

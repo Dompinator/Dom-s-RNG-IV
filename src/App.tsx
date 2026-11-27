@@ -1,8 +1,10 @@
+import { Film, Layers } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AddLayerModal } from './components/AddLayerModal';
 import { AuraRegistryModal } from './components/AuraRegistryModal';
 import { AuthModal } from './components/AuthModal';
 import { BaseplatePlayView } from './components/BaseplatePlayView';
+import { CutsceneEditorWorkspace } from './components/CutsceneEditorWorkspace';
 import { InspectorPanel } from './components/InspectorPanel';
 import { LayerPanel } from './components/LayerPanel';
 import { ProjectLibraryModal } from './components/ProjectLibraryModal';
@@ -27,15 +29,18 @@ import {
   saveProjectToLibrary,
   setLastActiveProjectId,
 } from './aura/storage';
-import type {
-  AnimationMode,
-  AuraAudioConfig,
-  AuraEnvironment,
-  AuraLayer,
-  AuraProject,
-  EffectType,
-  LayerAnimationSettings,
-  LayerEffectSettings,
+import {
+  POSE_PRESET_META,
+  type AnimationMode,
+  type AuraAudioConfig,
+  type AuraCutsceneConfig,
+  type AuraEnvironment,
+  type AuraLayer,
+  type AuraPosePreset,
+  type AuraProject,
+  type EffectType,
+  type LayerAnimationSettings,
+  type LayerEffectSettings,
 } from './aura/types';
 import {
   getDefaultCatalog,
@@ -61,8 +66,11 @@ import {
   type User,
 } from './firebase';
 import {
+  deleteUserProject,
   saveUserAccountState,
+  saveUserProject,
   subscribeToUserAccount,
+  subscribeToUserProjects,
 } from './game/accountSync';
 import {
   checkUserIsAdmin,
@@ -150,6 +158,7 @@ export default function App() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [zenMode, setZenMode] = useState(false);
+  const [studioTab, setStudioTab] = useState<'3d' | 'cutscene'>('3d');
   const [isExporting, setIsExporting] = useState(false);
 
   // Playable Game State (Roll Pool, Storage, Equip)
@@ -163,6 +172,7 @@ export default function App() {
   const [registryOpen, setRegistryOpen] = useState(false);
 
   const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authRevision, setAuthRevision] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -186,7 +196,10 @@ export default function App() {
   totalRollsRef.current = totalRolls;
   const accountUsernameRef = useRef<string>(accountUsername);
   accountUsernameRef.current = accountUsername;
+  const savedProjectsRef = useRef<AuraProject[]>(savedProjects);
+  savedProjectsRef.current = savedProjects;
   const migratedUidsRef = useRef<Set<string>>(new Set());
+  const migratedProjectUidsRef = useRef<Set<string>>(new Set());
 
   const effectiveMode: AppMode = isAdmin ? mode : 'play';
 
@@ -282,7 +295,52 @@ export default function App() {
     );
 
     return () => unsub();
-  }, [authUser]);
+  }, [authUser, authRevision]);
+
+  // Subscribe to verified admin's cloud Studio Projects (/accounts/{uid}/projects)
+  useEffect(() => {
+    if (!authUser || !authUser.emailVerified || !isAdmin) {
+      return;
+    }
+
+    const uid = authUser.uid;
+    const unsub = subscribeToUserProjects(
+      uid,
+      (cloudProjects) => {
+        const cloudIds = new Set(cloudProjects.map((p) => p.id));
+
+        if (!migratedProjectUidsRef.current.has(uid)) {
+          migratedProjectUidsRef.current.add(uid);
+          const localOnly = savedProjectsRef.current.filter(
+            (p) => !cloudIds.has(sanitizeAuraDocId(p.id)),
+          );
+          if (localOnly.length > 0) {
+            void Promise.all(
+              localOnly.map((proj) =>
+                saveUserProject(uid, proj, accountUsernameRef.current),
+              ),
+            ).catch((err) => {
+              const msg =
+                err instanceof Error
+                  ? err.message
+                  : 'Failed to sync local Studio projects.';
+              setCloudError(msg);
+            });
+          }
+          const merged = [...cloudProjects, ...localOnly];
+          setSavedProjects(merged);
+          return;
+        }
+
+        setSavedProjects(cloudProjects);
+      },
+      (err) => {
+        setCloudError(err.message);
+      },
+    );
+
+    return () => unsub();
+  }, [authUser, authRevision, isAdmin]);
 
   // Real-time Firestore Roll Pool subscription (automatically updates for ALL users on ALL devices)
   useEffect(() => {
@@ -435,7 +493,8 @@ export default function App() {
     try {
       await reload(auth.currentUser);
       const refreshed = auth.currentUser;
-      setAuthUser(refreshed ? ({ ...refreshed } as User) : null);
+      setAuthUser(refreshed);
+      setAuthRevision((r) => r + 1);
       if (refreshed?.emailVerified) {
         const admin = await checkUserIsAdmin(
           refreshed.uid,
@@ -459,6 +518,7 @@ export default function App() {
   const handleUpdateUsername = useCallback(
     async (newName: string) => {
       const clean = newName.trim().slice(0, 24) || 'Player';
+      accountUsernameRef.current = clean;
       setAccountUsername(clean);
       if (authUser && authUser.emailVerified) {
         try {
@@ -487,6 +547,10 @@ export default function App() {
   const handleSignOut = useCallback(async () => {
     await signOut(auth);
     migratedUidsRef.current.clear();
+    migratedProjectUidsRef.current.clear();
+    storageRef.current = [];
+    equippedAuraIdRef.current = null;
+    totalRollsRef.current = 0;
     setStorage([]);
     setEquippedAuraId(null);
     setTotalRolls(0);
@@ -537,6 +601,36 @@ export default function App() {
     });
   }, []);
 
+  const handleSaveProject = useCallback(() => {
+    const safeId = sanitizeAuraDocId(project.id);
+    const prepared: AuraProject = {
+      ...project,
+      id: safeId,
+      updatedAt: new Date().toISOString(),
+      textures: collectUsedTextures(project.layers),
+    };
+    const updatedList = saveProjectToLibrary(prepared);
+    setProject(prepared);
+    setSavedProjects(updatedList);
+    setHasUnsavedChanges(false);
+
+    if (authUser && authUser.emailVerified) {
+      void saveUserProject(authUser.uid, prepared, accountUsernameRef.current)
+        .then(() => {
+          setCloudError(null);
+          showToast(`Saved "${prepared.name}" to your account.`);
+        })
+        .catch((err) => {
+          const msg =
+            err instanceof Error ? err.message : 'Failed to save project to account.';
+          setCloudError(msg);
+          showToast('Saved locally; account cloud save failed.', 'error');
+        });
+    } else {
+      showToast(`Saved "${prepared.name}" to studio library.`);
+    }
+  }, [authUser, project, showToast]);
+
   useEffect(() => {
     if (mode !== 'studio') return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -551,15 +645,12 @@ export default function App() {
         handleRedo();
       } else if (key === 's') {
         e.preventDefault();
-        const updatedList = saveProjectToLibrary(project);
-        setSavedProjects(updatedList);
-        setHasUnsavedChanges(false);
-        showToast(`Saved "${project.name}" to studio library.`);
+        handleSaveProject();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mode, handleUndo, handleRedo, project, showToast]);
+  }, [mode, handleUndo, handleRedo, handleSaveProject]);
 
   const selectedLayer = useMemo(
     () => project.layers.find((l) => l.id === selectedLayerId) ?? null,
@@ -681,11 +772,24 @@ export default function App() {
     });
   };
 
-  const handleSetLevitate = (levitate: boolean) => {
+  const handleSetPosePreset = (posePreset: AuraPosePreset) => {
     commitChange((prev) => ({
       ...prev,
-      levitate,
+      posePreset,
+      levitate: POSE_PRESET_META[posePreset].floats,
     }));
+  };
+
+  const handleUpdateCutscene = (cutscene: AuraCutsceneConfig | undefined) => {
+    commitChange((prev) => {
+      const next = { ...prev };
+      if (cutscene) {
+        next.cutscene = cutscene;
+      } else {
+        delete next.cutscene;
+      }
+      return next;
+    });
   };
 
   const handleSyncAllToMusic = (subMode: AnimationMode) => {
@@ -714,13 +818,7 @@ export default function App() {
     );
   };
 
-  // Studio File I/O
-  const handleSaveProject = () => {
-    const updatedList = saveProjectToLibrary(project);
-    setSavedProjects(updatedList);
-    setHasUnsavedChanges(false);
-    showToast(`Saved "${project.name}" to studio library.`);
-  };
+  // Studio File I/O (delegates to cloud-synced handleSaveProject)
 
   const handleDownloadJson = () => {
     downloadProjectJson(project);
@@ -787,7 +885,20 @@ export default function App() {
   const handleDeleteSaved = (id: string) => {
     const list = deleteProjectFromLibrary(id);
     setSavedProjects(list);
-    showToast('Removed project from local library.');
+    if (authUser && authUser.emailVerified) {
+      void deleteUserProject(authUser.uid, id)
+        .then(() => {
+          showToast('Removed project from your account.');
+        })
+        .catch((err) => {
+          const msg =
+            err instanceof Error ? err.message : 'Failed to delete cloud project.';
+          setCloudError(msg);
+          showToast('Removed locally; failed to delete from cloud.', 'error');
+        });
+    } else {
+      showToast('Removed project from local library.');
+    }
   };
 
   // Send Studio Aura directly into the Roll Pool (auto-syncs to Firestore when signed in as Dompinator)
@@ -827,11 +938,18 @@ export default function App() {
     if (isAdmin && authUser) {
       upsertRollPoolAura(nextEntry, authUser.uid)
         .then(() => {
+          setCloudError(null);
+          const audioNote =
+            prepared.audio && prepared.audio.dataUrl.length > 920_000
+              ? ' (audio exceeded ~650KB cloud limit and was omitted)'
+              : '';
           showToast(
-            `"${prepared.name}" synced live to all users (${prepared.rarity.classification}).`,
+            `"${prepared.name}" synced live to all players (${prepared.rarity.classification})${audioNote}.`,
           );
         })
-        .catch(() => {
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : 'Cloud sync failed.';
+          setCloudError(msg);
           showToast('Saved locally; cloud sync encountered an error.', 'error');
         });
     } else {
@@ -889,6 +1007,8 @@ export default function App() {
             ];
       const nextRolls = totalRollsRef.current + 1;
 
+      storageRef.current = nextStorage;
+      totalRollsRef.current = nextRolls;
       setStorage(nextStorage);
       setTotalRolls(nextRolls);
       persistAccountProgression(nextStorage, equippedAuraIdRef.current, nextRolls);
@@ -898,6 +1018,7 @@ export default function App() {
 
   const handleEquipAura = useCallback(
     (auraId: string | null) => {
+      equippedAuraIdRef.current = auraId;
       setEquippedAuraId(auraId);
       persistAccountProgression(storageRef.current, auraId, totalRollsRef.current);
       if (auraId) {
@@ -915,8 +1036,10 @@ export default function App() {
       const nextStorage = storageRef.current.filter((s) => s.auraId !== auraId);
       const nextEquipped =
         equippedAuraIdRef.current === auraId ? null : equippedAuraIdRef.current;
+      storageRef.current = nextStorage;
       setStorage(nextStorage);
       if (nextEquipped !== equippedAuraIdRef.current) {
+        equippedAuraIdRef.current = nextEquipped;
         setEquippedAuraId(nextEquipped);
       }
       persistAccountProgression(nextStorage, nextEquipped, totalRollsRef.current);
@@ -1042,25 +1165,29 @@ export default function App() {
         saveCatalog(next);
         return next;
       });
-      setStorage((prev) => {
-        const next = prev.filter((s) => s.auraId !== auraId);
-        saveStorage(next);
-        return next;
-      });
-      if (equippedAuraId === auraId) {
-        setEquippedAuraId(null);
-        saveEquippedAuraId(null);
-      }
+      const nextStorage = storageRef.current.filter((s) => s.auraId !== auraId);
+      const nextEquipped =
+        equippedAuraIdRef.current === auraId ? null : equippedAuraIdRef.current;
+      storageRef.current = nextStorage;
+      equippedAuraIdRef.current = nextEquipped;
+      setStorage(nextStorage);
+      setEquippedAuraId(nextEquipped);
+      persistAccountProgression(nextStorage, nextEquipped, totalRollsRef.current);
 
       if (isAdmin && authUser) {
-        void deleteRollPoolAura(auraId).then(() => {
-          showToast('Removed aura from live Roll Pool.');
-        });
+        void deleteRollPoolAura(auraId)
+          .then(() => {
+            showToast('Removed aura from live Roll Pool.');
+          })
+          .catch((err) => {
+            const msg = err instanceof Error ? err.message : 'Cloud delete failed.';
+            setCloudError(msg);
+          });
       } else {
         showToast('Removed aura from local Roll Pool.');
       }
     },
-    [equippedAuraId, isAdmin, authUser, showToast],
+    [isAdmin, authUser, persistAccountProgression, showToast],
   );
 
   const handleGrantToStorage = useCallback(
@@ -1078,17 +1205,23 @@ export default function App() {
     const empty = getDefaultCatalog();
     setCatalog(empty);
     saveCatalog(empty);
+    equippedAuraIdRef.current = null;
     setEquippedAuraId(null);
-    saveEquippedAuraId(null);
+    persistAccountProgression(storageRef.current, null, totalRollsRef.current);
 
     if (isAdmin && authUser) {
-      void Promise.all(currentIds.map((id) => deleteRollPoolAura(id))).then(() => {
-        showToast('Cleared all auras from live Roll Pool.');
-      });
+      void Promise.all(currentIds.map((id) => deleteRollPoolAura(id)))
+        .then(() => {
+          showToast('Cleared all auras from live Roll Pool.');
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : 'Cloud clear failed.';
+          setCloudError(msg);
+        });
     } else {
       showToast('Cleared all local auras from Roll Pool.');
     }
-  }, [isAdmin, authUser, showToast]);
+  }, [isAdmin, authUser, persistAccountProgression, showToast]);
 
   const handleOpenInStudio = useCallback(
     (target: AuraProject) => {
@@ -1164,45 +1297,96 @@ export default function App() {
             onEquipAura={handleEquipAura}
           />
         ) : (
-          <>
-            {!zenMode && (
-              <LayerPanel
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Studio Sub-Navigation: 3D Aura Editor vs Cutscene Editor */}
+            <div className="h-10 shrink-0 bg-[#0b0e15] border-b border-white/[0.07] px-4 flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setStudioTab('3d')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                    studioTab === '3d'
+                      ? 'bg-[#1a2030] text-white border border-white/[0.12]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5 text-sky-400" />
+                  <span>3D Aura Layers</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStudioTab('cutscene')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
+                    studioTab === 'cutscene'
+                      ? 'bg-[#1a2030] text-white border border-white/[0.12]'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Film className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Cutscene Editor</span>
+                  {project.cutscene?.enabled && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  )}
+                </button>
+              </div>
+              <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400">
+                <span>
+                  {studioTab === 'cutscene'
+                    ? 'Custom Sol\'s RNG-inspired roll cutscene & synthesized impact audio'
+                    : 'Build 3D aura layers, character pose presets, and spatial audio'}
+                </span>
+              </div>
+            </div>
+
+            {studioTab === 'cutscene' ? (
+              <CutsceneEditorWorkspace
                 project={project}
-                selectedLayerId={selectedLayerId}
-                onSelectLayer={setSelectedLayerId}
-                onOpenAddModal={() => setAddModalOpen(true)}
-                onToggleVisibility={handleToggleVisibility}
-                onDuplicateLayer={handleDuplicateLayer}
-                onDeleteLayer={handleDeleteLayer}
-                onMoveLayer={handleMoveLayer}
-                onUpdateProjectMeta={handleUpdateProjectMeta}
-                onUpdateBaseOdds={handleUpdateBaseOdds}
-                onUpdateEnvironment={handleUpdateEnvironment}
-                onUpdateAudio={handleUpdateAudio}
-                onSetLevitate={handleSetLevitate}
-                onToggleAllMusicSync={handleToggleAllMusicSync}
+                zenMode={zenMode}
+                onUpdateCutscene={handleUpdateCutscene}
                 onNotify={showToast}
               />
-            )}
+            ) : (
+              <div className="flex-1 min-h-0 flex overflow-hidden">
+                {!zenMode && (
+                  <LayerPanel
+                    project={project}
+                    selectedLayerId={selectedLayerId}
+                    onSelectLayer={setSelectedLayerId}
+                    onOpenAddModal={() => setAddModalOpen(true)}
+                    onToggleVisibility={handleToggleVisibility}
+                    onDuplicateLayer={handleDuplicateLayer}
+                    onDeleteLayer={handleDeleteLayer}
+                    onMoveLayer={handleMoveLayer}
+                    onUpdateProjectMeta={handleUpdateProjectMeta}
+                    onUpdateBaseOdds={handleUpdateBaseOdds}
+                    onUpdateEnvironment={handleUpdateEnvironment}
+                    onUpdateAudio={handleUpdateAudio}
+                    onSetPosePreset={handleSetPosePreset}
+                    onToggleAllMusicSync={handleToggleAllMusicSync}
+                    onNotify={showToast}
+                  />
+                )}
 
-            <ViewportCanvas
-              project={project}
-              zenMode={zenMode}
-              onToggleZenMode={() => setZenMode((z) => !z)}
-              onSetLevitate={handleSetLevitate}
-            />
+                <ViewportCanvas
+                  project={project}
+                  zenMode={zenMode}
+                  onToggleZenMode={() => setZenMode((z) => !z)}
+                  onSetPosePreset={handleSetPosePreset}
+                />
 
-            {!zenMode && (
-              <InspectorPanel
-                layer={selectedLayer}
-                hasAudio={Boolean(project.audio)}
-                onUpdateLayer={handleUpdateLayer}
-                onUpdateSettings={handleUpdateSettings}
-                onUpdateAnimation={handleUpdateAnimation}
-                onSyncAllToMusic={handleSyncAllToMusic}
-              />
+                {!zenMode && (
+                  <InspectorPanel
+                    layer={selectedLayer}
+                    hasAudio={Boolean(project.audio)}
+                    onUpdateLayer={handleUpdateLayer}
+                    onUpdateSettings={handleUpdateSettings}
+                    onUpdateAnimation={handleUpdateAnimation}
+                    onSyncAllToMusic={handleSyncAllToMusic}
+                  />
+                )}
+              </div>
             )}
-          </>
+          </div>
         )}
       </main>
 
@@ -1218,6 +1402,7 @@ export default function App() {
             open={libraryOpen}
             activeProjectId={project.id}
             savedProjects={savedProjects}
+            cloudSynced={Boolean(authUser && authUser.emailVerified)}
             onClose={() => setLibraryOpen(false)}
             onCreateBlank={handleCreateBlank}
             onLoadProject={handleLoadProject}

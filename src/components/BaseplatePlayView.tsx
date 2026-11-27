@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Database,
   Dices,
+  Film,
   LogIn,
   LogOut,
   Music,
@@ -19,6 +20,7 @@ import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
 import { BaseplateWorldEngine } from '../engine/BaseplateWorldEngine';
 import type { SpatialAudioState } from '../engine/spatialAudio';
+import { CutscenePlayerOverlay } from './CutscenePlayerOverlay';
 import type { User } from '../firebase';
 import {
   rollAuraFromCatalog,
@@ -79,6 +81,7 @@ export function BaseplatePlayView({
   const [audioState, setAudioState] = useState<SpatialAudioState>('none');
   const [previewRollName, setPreviewRollName] = useState<string>('');
   const [rolledReveal, setRolledReveal] = useState<AuraProject | null>(null);
+  const [activeCutsceneAura, setActiveCutsceneAura] = useState<AuraProject | null>(null);
 
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayerState[]>([]);
   const [audibleIds, setAudibleIds] = useState<Set<string>>(() => new Set());
@@ -230,8 +233,9 @@ export function BaseplatePlayView({
   }, [authUser, sessionId]);
 
   const performRoll = () => {
-    if (isRolling || enabledPool.length === 0) return;
+    if (isRolling || activeCutsceneAura || enabledPool.length === 0) return;
 
+    engineRef.current?.unlockAudio();
     setIsRolling(true);
     setRolledReveal(null);
 
@@ -247,21 +251,25 @@ export function BaseplatePlayView({
         setIsRolling(false);
         if (winner) {
           onRecordRoll(winner.project);
-          setRolledReveal(winner.project);
+          if (winner.project.cutscene?.enabled) {
+            setActiveCutsceneAura(winner.project);
+          } else {
+            setRolledReveal(winner.project);
+          }
         }
       }
     }, 75);
   };
 
-  // Auto-roll loop when toggled on
+  // Auto-roll loop when toggled on (paused while rolling or cutscene is playing)
   useEffect(() => {
-    if (!autoRoll || isRolling) return;
+    if (!autoRoll || isRolling || activeCutsceneAura) return;
     const timer = window.setTimeout(() => {
       performRoll();
     }, 900);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRoll, isRolling, rolledReveal]);
+  }, [autoRoll, isRolling, activeCutsceneAura, rolledReveal]);
 
   const uniqueOwned = storage.length;
   const totalOwned = storage.reduce((sum, s) => sum + s.count, 0);
@@ -598,6 +606,17 @@ export function BaseplatePlayView({
                 </>
               )}
             </button>
+            {rolledReveal.cutscene?.enabled && (
+              <button
+                type="button"
+                onClick={() => setActiveCutsceneAura(rolledReveal)}
+                title="Replay Cutscene"
+                className="flex items-center gap-1.5 py-2 px-3 rounded-lg bg-white/[0.07] hover:bg-white/[0.14] border border-white/[0.1] text-xs font-medium text-slate-100 transition-colors cursor-pointer"
+              >
+                <Film className="w-3.5 h-3.5 text-amber-400" />
+                <span>Cutscene</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -635,7 +654,7 @@ export function BaseplatePlayView({
         <button
           type="button"
           onClick={performRoll}
-          disabled={isRolling || enabledPool.length === 0}
+          disabled={isRolling || Boolean(activeCutsceneAura) || enabledPool.length === 0}
           className="flex items-center gap-2.5 px-8 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.98] disabled:opacity-50 text-slate-950 font-display text-base font-bold tracking-wide shadow-2xl transition-all cursor-pointer"
         >
           <Dices className="w-5 h-5" />
@@ -703,6 +722,17 @@ export function BaseplatePlayView({
       >
         Jump
       </button>
+
+      {activeCutsceneAura && (
+        <CutscenePlayerOverlay
+          aura={activeCutsceneAura}
+          initialMuted={audioMuted}
+          onComplete={() => {
+            setRolledReveal(activeCutsceneAura);
+            setActiveCutsceneAura(null);
+          }}
+        />
+      )}
     </div>
   );
 }

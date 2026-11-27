@@ -166,6 +166,194 @@ export interface AuraAudioConfig {
   rolloffFactor: number;
 }
 
+export const AURA_POSE_PRESETS = [
+  'idle',
+  'levitate',
+  'meditate',
+  'crossed_arms',
+  'sword_stance',
+  'ascension',
+  'throne',
+] as const;
+
+export type AuraPosePreset = (typeof AURA_POSE_PRESETS)[number];
+
+export const POSE_PRESET_META: Record<
+  AuraPosePreset,
+  { label: string; desc: string; floats: boolean }
+> = {
+  idle: {
+    label: 'Standing Idle',
+    desc: 'Classic grounded breathing & subtle sway',
+    floats: false,
+  },
+  levitate: {
+    label: 'Levitate',
+    desc: 'Mid-air hover with relaxed limbs',
+    floats: true,
+  },
+  meditate: {
+    label: 'Meditation Float',
+    desc: 'Cross-legged serene floating stance',
+    floats: true,
+  },
+  crossed_arms: {
+    label: 'Crossed Arms',
+    desc: 'Dominant folded-arms commander stance',
+    floats: false,
+  },
+  sword_stance: {
+    label: 'Blade Ready',
+    desc: 'Angled combat-ready weapon hover pose',
+    floats: false,
+  },
+  ascension: {
+    label: 'Ascension',
+    desc: 'High-altitude arms-wide celestial hover',
+    floats: true,
+  },
+  throne: {
+    label: 'Overlord Throne',
+    desc: 'Elevated seated sovereign pose',
+    floats: true,
+  },
+};
+
+export const CUTSCENE_TIERS = ['epic', 'legendary_mythic'] as const;
+export type CutsceneTier = (typeof CUTSCENE_TIERS)[number];
+
+export const CUTSCENE_SHAPES = [
+  'four_point_star',
+  'eight_point_star',
+  'arcane_ring',
+  'hex_portal',
+  'shockwave_ring',
+  'sacred_triangle',
+  'crescent_moon',
+  'cross_flare',
+  'shard_burst',
+  'spiral_vortex',
+  'lightning_crack',
+  'orb_core',
+] as const;
+export type CutsceneShapeType = (typeof CUTSCENE_SHAPES)[number];
+
+export const CUTSCENE_SHAPE_LABELS: Record<CutsceneShapeType, string> = {
+  four_point_star: '4-Point Star',
+  eight_point_star: '8-Point Starburst',
+  arcane_ring: 'Arcane Rune Ring',
+  hex_portal: 'Hex Portal',
+  shockwave_ring: 'Shockwave Blast',
+  sacred_triangle: 'Sacred Seal',
+  crescent_moon: 'Eclipse Crescent',
+  cross_flare: 'Anamorphic Slash',
+  shard_burst: 'Crystal Shards',
+  spiral_vortex: 'Spiral Vortex',
+  lightning_crack: 'Reality Fracture',
+  orb_core: 'Singularity Core',
+};
+
+export const CUTSCENE_PHASES = ['all', 'buildup', 'climax', 'reveal'] as const;
+export type CutscenePhase = (typeof CUTSCENE_PHASES)[number];
+
+export const CUTSCENE_MOTIONS = [
+  'spin_cw',
+  'spin_ccw',
+  'pulse',
+  'expand',
+  'converge',
+  'shatter',
+  'flicker',
+] as const;
+export type CutsceneMotion = (typeof CUTSCENE_MOTIONS)[number];
+
+export const CUTSCENE_AUDIO_PRESETS = [
+  'cosmic_sub_drop',
+  'void_shatter',
+  'celestial_choir',
+  'infernal_brass',
+  'hyper_glitch',
+  'epic_chime',
+  'none',
+] as const;
+export type CutsceneAudioPreset = (typeof CUTSCENE_AUDIO_PRESETS)[number];
+
+export const CUTSCENE_AUDIO_LABELS: Record<
+  CutsceneAudioPreset,
+  { label: string; desc: string }
+> = {
+  cosmic_sub_drop: {
+    label: 'Cosmic Sub Drop',
+    desc: 'Deep rising sub-bass tension into earth-shaking drop',
+  },
+  void_shatter: {
+    label: 'Void Shatter',
+    desc: 'Dark ticking buildup into dimensional glass-break impact',
+  },
+  celestial_choir: {
+    label: 'Celestial Choir',
+    desc: 'Heavenly shimmer chords + radiant bell climax',
+  },
+  infernal_brass: {
+    label: 'Infernal Brass',
+    desc: 'Aggressive distorted synth horn & thunder impact',
+  },
+  hyper_glitch: {
+    label: 'Hyper Glitch',
+    desc: 'Fast arpeggiated cyber-chirps & digital overload drop',
+  },
+  epic_chime: {
+    label: 'Epic Star Chime',
+    desc: 'Crisp short buildup + bright star chime impact',
+  },
+  none: {
+    label: 'Silent',
+    desc: 'No cutscene audio',
+  },
+};
+
+export interface CutsceneCustomAudio {
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  volume: number;
+}
+
+export interface CutsceneElement {
+  id: string;
+  name: string;
+  shape: CutsceneShapeType;
+  visible: boolean;
+  phase: CutscenePhase;
+  motion: CutsceneMotion;
+  color: string;
+  secondaryColor: string;
+  x: number; // -50 to 50 (% of viewport width from center)
+  y: number; // -50 to 50 (% of viewport height from center)
+  size: number; // 0.2 to 3.0
+  speed: number; // 0 to 4.0
+  opacity: number; // 0.1 to 1.0
+  glow: number; // 0 to 2.5
+  count: number; // 1 to 24 (spokes/shards/arms)
+  rotation: number; // -180 to 180 degrees
+}
+
+export interface AuraCutsceneConfig {
+  enabled: boolean;
+  tier: CutsceneTier;
+  duration: number;
+  primaryColor: string;
+  secondaryColor: string;
+  backgroundColor: string;
+  headlineText: string;
+  shakeIntensity: number;
+  flashIntensity: number;
+  audioPreset: CutsceneAudioPreset;
+  audioVolume: number;
+  customAudio?: CutsceneCustomAudio;
+  elements: CutsceneElement[];
+}
+
 export interface AuraProject {
   formatVersion: string;
   engine: string;
@@ -180,9 +368,11 @@ export interface AuraProject {
   textures: TextureRef[];
   audio?: AuraAudioConfig;
   levitate?: boolean;
+  posePreset?: AuraPosePreset;
+  cutscene?: AuraCutsceneConfig;
 }
 
-export type CharacterPoseMode = 'idle' | 'levitate' | 'tpose' | 'paused';
+export type CharacterPoseMode = AuraPosePreset | 'tpose' | 'paused';
 export type CameraPreset = 'hero' | 'front' | 'closeup' | 'top' | 'low';
 
 export interface EffectCatalogEntry {

@@ -1,4 +1,4 @@
-import { FilePlus2, Trash2, X } from 'lucide-react';
+import { Cloud, FilePlus2, Trash2, X } from 'lucide-react';
 import { PRESET_AURAS } from '../aura/presets';
 import { formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import type { AuraProject } from '../aura/types';
@@ -7,6 +7,7 @@ interface ProjectLibraryModalProps {
   open: boolean;
   activeProjectId: string;
   savedProjects: AuraProject[];
+  cloudSynced: boolean;
   onClose: () => void;
   onCreateBlank: () => void;
   onLoadProject: (project: AuraProject, asClone?: boolean) => void;
@@ -17,6 +18,7 @@ export function ProjectLibraryModal({
   open,
   activeProjectId,
   savedProjects,
+  cloudSynced,
   onClose,
   onCreateBlank,
   onLoadProject,
@@ -38,8 +40,19 @@ export function ProjectLibraryModal({
             <h2 className="font-display text-base font-semibold text-white">
               Aura Projects &amp; Studio Presets
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Load a saved aura from local storage, start fresh, or inspect reference presets.
+            <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5">
+              {cloudSynced ? (
+                <>
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>
+                    Saved projects sync to your account across devices.
+                  </span>
+                </>
+              ) : (
+                <span>
+                  Load a saved aura project, start fresh, or inspect reference presets.
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -72,7 +85,9 @@ export function ProjectLibraryModal({
             </h3>
             {savedProjects.length === 0 ? (
               <div className="border border-white/[0.07] bg-[#141925] rounded-lg p-4 text-xs text-slate-400">
-                No saved projects yet. Click &ldquo;Save&rdquo; in the top toolbar to store your current aura locally.
+                {cloudSynced
+                  ? 'No saved projects on this account yet. Click “Save” in the top toolbar to save your current aura to your account.'
+                  : 'No saved projects yet. Click “Save” in the top toolbar to store your current aura.'}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">

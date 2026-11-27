@@ -1,17 +1,24 @@
 import {
+  collection,
+  deleteDoc,
   doc,
   getDoc,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
   type Unsubscribe,
 } from 'firebase/firestore';
+import type { AuraProject } from '../aura/types';
+import { validateAuraProject } from '../aura/validator';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { sanitizeAuraDocId } from './firestoreRollPool';
+import { buildSanitizedProject, sanitizeAuraDocId } from './firestoreRollPool';
 import type { StoredAuraEntry } from './gameRegistry';
 
 const ACCOUNTS_COLLECTION = 'accounts';
+const PROJECTS_SUBCOLLECTION = 'projects';
 
 export interface UserAccountSave {
   uid: string;
@@ -19,6 +26,16 @@ export interface UserAccountSave {
   equippedAuraId: string | null;
   totalRolls: number;
   storage: StoredAuraEntry[];
+}
+
+// Per-uid write queue so rapid rolls / equip changes never overwrite each other out of order
+const accountWriteQueues = new Map<string, Promise<void>>();
+
+function enqueueAccountWrite(uid: string, task: () => Promise<void>): Promise<void> {
+  const prev = accountWriteQueues.get(uid) ?? Promise.resolve();
+  const next = prev.catch(() => undefined).then(task);
+  accountWriteQueues.set(uid, next);
+  return next;
 }
 
 function sanitizeStorageList(raw: unknown): StoredAuraEntry[] {
@@ -110,7 +127,7 @@ export function subscribeToUserAccount(
   );
 }
 
-export async function saveUserAccountState(
+export function saveUserAccountState(
   uid: string,
   state: {
     username: string;
@@ -121,41 +138,171 @@ export async function saveUserAccountState(
 ): Promise<void> {
   const safeUid = sanitizeAuraDocId(uid);
   const docPath = `${ACCOUNTS_COLLECTION}/${safeUid}`;
-  const ref = doc(db, ACCOUNTS_COLLECTION, safeUid);
 
-  const safeUsername = state.username.trim().slice(0, 24) || 'Player';
-  const safeEquipped =
-    state.equippedAuraId && state.equippedAuraId.trim()
-      ? sanitizeAuraDocId(state.equippedAuraId.trim())
-      : '';
-  const safeRolls = Math.max(
-    0,
-    Math.min(1_000_000_000, Math.round(state.totalRolls || 0)),
+  return enqueueAccountWrite(safeUid, async () => {
+    const ref = doc(db, ACCOUNTS_COLLECTION, safeUid);
+    const safeUsername = state.username.trim().slice(0, 24) || 'Player';
+    const safeEquipped =
+      state.equippedAuraId && state.equippedAuraId.trim()
+        ? sanitizeAuraDocId(state.equippedAuraId.trim())
+        : '';
+    const safeRolls = Math.max(
+      0,
+      Math.min(1_000_000_000, Math.round(state.totalRolls || 0)),
+    );
+    const safeStorage = sanitizeStorageList(state.storage);
+
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        await updateDoc(ref, {
+          username: safeUsername,
+          equippedAuraId: safeEquipped,
+          totalRolls: safeRolls,
+          storage: safeStorage,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(ref, {
+          uid: safeUid,
+          username: safeUsername,
+          equippedAuraId: safeEquipped,
+          totalRolls: safeRolls,
+          storage: safeStorage,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, docPath);
+    }
+  });
+}
+
+export function subscribeToUserProjects(
+  uid: string,
+  onUpdate: (projects: AuraProject[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const safeUid = sanitizeAuraDocId(uid);
+  const colPath = `${ACCOUNTS_COLLECTION}/${safeUid}/${PROJECTS_SUBCOLLECTION}`;
+  const projectsQuery = query(
+    collection(db, ACCOUNTS_COLLECTION, safeUid, PROJECTS_SUBCOLLECTION),
+    limit(200),
   );
-  const safeStorage = sanitizeStorageList(state.storage);
+
+  return onSnapshot(
+    projectsQuery,
+    (snapshot) => {
+      const items: { project: AuraProject; updatedMs: number }[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const val = validateAuraProject(data?.project);
+        if (!val.ok) return;
+        const ts = data?.updatedAt;
+        const updatedMs =
+          ts && typeof ts.toMillis === 'function'
+            ? ts.toMillis()
+            : Date.parse(val.project.updatedAt) || 0;
+        items.push({
+          project: {
+            ...val.project,
+            id: docSnap.id,
+          },
+          updatedMs,
+        });
+      });
+
+      items.sort((a, b) => b.updatedMs - a.updatedMs);
+      onUpdate(items.map((i) => i.project));
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, colPath);
+      } catch (wrapped) {
+        if (onError && wrapped instanceof Error) {
+          onError(wrapped);
+        }
+      }
+    },
+  );
+}
+
+export async function saveUserProject(
+  uid: string,
+  project: AuraProject,
+  fallbackUsername = 'Player',
+): Promise<AuraProject> {
+  const safeUid = sanitizeAuraDocId(uid);
+  const safeProjectId = sanitizeAuraDocId(project.id);
+  const docPath = `${ACCOUNTS_COLLECTION}/${safeUid}/${PROJECTS_SUBCOLLECTION}/${safeProjectId}`;
+  const sanitized = buildSanitizedProject(project, safeProjectId);
 
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      await updateDoc(ref, {
-        username: safeUsername,
-        equippedAuraId: safeEquipped,
-        totalRolls: safeRolls,
-        storage: safeStorage,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(ref, {
+    // Ensure parent /accounts/{uid} exists so Master Gate exists() rule always passes
+    const accountRef = doc(db, ACCOUNTS_COLLECTION, safeUid);
+    const accountSnap = await getDoc(accountRef);
+    if (!accountSnap.exists()) {
+      await setDoc(accountRef, {
         uid: safeUid,
-        username: safeUsername,
-        equippedAuraId: safeEquipped,
-        totalRolls: safeRolls,
-        storage: safeStorage,
+        username: fallbackUsername.trim().slice(0, 24) || 'Player',
+        equippedAuraId: '',
+        totalRolls: 0,
+        storage: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     }
+
+    const projRef = doc(
+      db,
+      ACCOUNTS_COLLECTION,
+      safeUid,
+      PROJECTS_SUBCOLLECTION,
+      safeProjectId,
+    );
+    const existingSnap = await getDoc(projRef);
+    if (existingSnap.exists()) {
+      await updateDoc(projRef, {
+        name: sanitized.name,
+        description: sanitized.description,
+        classification: sanitized.rarity.classification,
+        baseOdds: sanitized.rarity.baseOdds,
+        project: sanitized,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(projRef, {
+        id: safeProjectId,
+        ownerUid: safeUid,
+        name: sanitized.name,
+        description: sanitized.description,
+        classification: sanitized.rarity.classification,
+        baseOdds: sanitized.rarity.baseOdds,
+        project: sanitized,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    return sanitized;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, docPath);
+  }
+}
+
+export async function deleteUserProject(
+  uid: string,
+  projectId: string,
+): Promise<void> {
+  const safeUid = sanitizeAuraDocId(uid);
+  const safeProjectId = sanitizeAuraDocId(projectId);
+  const docPath = `${ACCOUNTS_COLLECTION}/${safeUid}/${PROJECTS_SUBCOLLECTION}/${safeProjectId}`;
+  try {
+    await deleteDoc(
+      doc(db, ACCOUNTS_COLLECTION, safeUid, PROJECTS_SUBCOLLECTION, safeProjectId),
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, docPath);
   }
 }

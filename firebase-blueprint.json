@@ -44,7 +44,7 @@
         },
         "project": {
           "type": "object",
-          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures, and optional spatial audio)."
+          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures, posePreset, cutscene, and optional spatial audio)."
         },
         "createdAt": {
           "type": "string",
@@ -216,6 +216,72 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "UserProject": {
+      "title": "UserProject",
+      "description": "Account-saved Aura Studio project so creator drafts persist across sessions and devices.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique project identifier matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Verified Firebase Auth UID of the project owner."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Display name of the Studio aura project."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 240,
+          "description": "Short project description."
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"],
+          "description": "Rarity tier derived from baseOdds."
+        },
+        "baseOdds": {
+          "type": "number",
+          "description": "1-in-N base odds configured for this project."
+        },
+        "project": {
+          "type": "object",
+          "description": "Native map containing the validated AuraProject definition (layers, rarity, environment, textures, audio, levitate, posePreset, and cutscene)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the project was first saved to the account."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the project was last saved."
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "name",
+        "description",
+        "classification",
+        "baseOdds",
+        "project",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -242,6 +308,12 @@
         "$ref": "#/entities/UserAccount"
       },
       "description": "Private per-account aura storage, equipped aura, username, and roll stats."
+    },
+    "/accounts/{userId}/projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/UserProject"
+      },
+      "description": "Private per-account saved Aura Studio projects synced across devices."
     }
   }
 }

@@ -16,10 +16,13 @@ import { encodeAudioFileForAura } from '../aura/audioEncoder';
 import { classifyBaseOdds, formatOdds, RARITY_COLOR_STYLES } from '../aura/rarity';
 import {
   ANCHOR_LABELS,
+  AURA_POSE_PRESETS,
   EFFECT_CATALOG,
+  POSE_PRESET_META,
   type AuraAudioConfig,
   type AuraEnvironment,
   type AuraLayer,
+  type AuraPosePreset,
   type AuraProject,
 } from '../aura/types';
 
@@ -36,7 +39,7 @@ interface LayerPanelProps {
   onUpdateBaseOdds: (baseOdds: number) => void;
   onUpdateEnvironment: (patch: Partial<AuraEnvironment>) => void;
   onUpdateAudio: (audio: AuraAudioConfig | undefined) => void;
-  onSetLevitate: (levitate: boolean) => void;
+  onSetPosePreset: (pose: AuraPosePreset) => void;
   onToggleAllMusicSync: (enabled: boolean) => void;
   onNotify: (text: string, kind?: 'info' | 'error') => void;
 }
@@ -65,7 +68,7 @@ export function LayerPanel({
   onUpdateBaseOdds,
   onUpdateEnvironment,
   onUpdateAudio,
-  onSetLevitate,
+  onSetPosePreset,
   onToggleAllMusicSync,
   onNotify,
 }: LayerPanelProps) {
@@ -75,6 +78,8 @@ export function LayerPanel({
 
   const rarityStyle = RARITY_COLOR_STYLES[project.rarity.classification];
   const previewRarity = classifyBaseOdds(project.rarity.baseOdds);
+  const activePose: AuraPosePreset =
+    project.posePreset ?? (project.levitate ? 'levitate' : 'idle');
   const syncedLayerCount = project.layers.filter((l) => l.animation.syncToMusic).length;
   const allLayersSynced =
     project.layers.length > 0 && syncedLayerCount === project.layers.length;
@@ -362,22 +367,44 @@ export function LayerPanel({
                 className="w-full bg-[#151a26] border border-white/[0.08] focus:border-amber-500/70 rounded-md px-2.5 py-1.5 text-xs text-slate-200 outline-none resize-none"
               />
             </div>
-            <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-3 py-2 cursor-pointer">
-              <div>
-                <div className="text-xs font-medium text-slate-100">
-                  Levitate In-Game
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  Player hovers in mid-air while equipping this aura
-                </div>
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-medium text-slate-300">
+                  In-Game Character Pose
+                </label>
+                <span className="text-[10px] text-amber-300 font-medium">
+                  {POSE_PRESET_META[activePose].floats ? 'Floating Stance' : 'Grounded Stance'}
+                </span>
               </div>
-              <input
-                type="checkbox"
-                checked={Boolean(project.levitate)}
-                onChange={(e) => onSetLevitate(e.target.checked)}
-                className="accent-amber-500 w-4 h-4 shrink-0"
-              />
-            </label>
+              <div className="grid grid-cols-1 gap-1.5">
+                {AURA_POSE_PRESETS.map((poseKey) => {
+                  const meta = POSE_PRESET_META[poseKey];
+                  const selected = activePose === poseKey;
+                  return (
+                    <button
+                      key={poseKey}
+                      type="button"
+                      onClick={() => onSetPosePreset(poseKey)}
+                      className={`text-left px-2.5 py-2 rounded-lg border transition-colors cursor-pointer ${
+                        selected
+                          ? 'bg-amber-500/15 border-amber-500/50 text-white'
+                          : 'bg-[#141824] border-white/[0.06] hover:border-white/[0.14] text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium">{meta.label}</span>
+                        <span className="text-[10px] text-slate-400">
+                          {meta.floats ? 'Hover' : 'Ground'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                        {meta.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </section>
 
           <hr className="border-white/[0.07]" />
