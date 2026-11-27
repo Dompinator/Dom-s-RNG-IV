@@ -19,7 +19,7 @@ export function createCutsceneElement(
     name: overrides.name ?? CUTSCENE_SHAPE_LABELS[shape],
     shape,
     visible: true,
-    phase: shape === 'custom_text' ? 'buildup' : 'all',
+    phase: 'all',
     motion:
       shape === 'shockwave_ring'
         ? 'expand'
@@ -28,7 +28,7 @@ export function createCutsceneElement(
           : shape === 'orb_core' || shape === 'cross_flare'
             ? 'pulse'
             : shape === 'custom_text'
-              ? 'slam'
+              ? 'fade'
               : 'spin_cw',
     color: shape === 'custom_text' ? '#ffffff' : '#fbbf24',
     secondaryColor: shape === 'custom_text' ? '#fbbf24' : '#38bdf8',
@@ -41,7 +41,12 @@ export function createCutsceneElement(
     count: shape === 'shard_burst' ? 12 : shape === 'lightning_crack' ? 8 : 6,
     rotation: 0,
     ...(shape === 'custom_text'
-      ? { text: 'THE HEAVENS TREMBLE...', fontStyle: 'display' as const }
+      ? {
+          text: 'Custom Text',
+          fontStyle: 'display' as const,
+          startTime: 0.5,
+          duration: 3.0,
+        }
       : {}),
     ...overrides,
   };
@@ -120,7 +125,7 @@ export function createDefaultCutscene(
       primaryColor,
       secondaryColor,
       backgroundColor: '#020308',
-      headlineText: 'A shimmering force fractures the sky...',
+      headlineText: '',
       showHeadlineText: false,
       showRevealText: true,
       shakeIntensity: 1.5,
@@ -224,8 +229,8 @@ export function createDefaultCutscene(
       primaryColor,
       secondaryColor,
       backgroundColor: '#020209',
-      headlineText: 'An ancient seal breaks across dimensions...',
-      showHeadlineText: true,
+      headlineText: '',
+      showHeadlineText: false,
       showRevealText: true,
       shakeIntensity: 1.75,
       flashIntensity: 1.65,
@@ -338,8 +343,8 @@ export function createDefaultCutscene(
     primaryColor,
     secondaryColor,
     backgroundColor: '#010105',
-    headlineText: 'All stars fall silent before what awakens...',
-    showHeadlineText: true,
+    headlineText: '',
+    showHeadlineText: false,
     showRevealText: true,
     shakeIntensity: 2.1,
     flashIntensity: 2.0,
@@ -450,19 +455,6 @@ export function createDefaultCutscene(
         count: 22,
         glow: 1.8,
       }),
-      createCutsceneElement('custom_text', {
-        name: 'Mythic Omen Text',
-        phase: 'buildup',
-        motion: 'flicker',
-        color: '#ffffff',
-        secondaryColor: primaryColor,
-        x: 0,
-        y: -26,
-        size: 0.95,
-        speed: 0.9,
-        text: 'MYTHIC MANIFESTATION',
-        fontStyle: 'mono',
-      }),
     ],
   };
 }
@@ -508,7 +500,6 @@ export const CUTSCENE_TEMPLATES: CutsceneTemplate[] = [
       return {
         ...base,
         backgroundColor: '#020106',
-        headlineText: 'From the deepest abyss, reality tears open...',
         audioPreset: 'void_shatter',
         shakeIntensity: 2.2,
       };
@@ -523,7 +514,6 @@ export const CUTSCENE_TEMPLATES: CutsceneTemplate[] = [
       return {
         ...base,
         backgroundColor: '#070203',
-        headlineText: 'A blazing star ignites the heavens...',
         audioPreset: 'infernal_brass',
         flashIntensity: 1.85,
       };

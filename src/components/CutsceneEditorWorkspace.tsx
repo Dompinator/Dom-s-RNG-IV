@@ -62,15 +62,20 @@ const PHASE_LABELS: Record<CutscenePhase, string> = {
 };
 
 const MOTION_LABELS: Record<CutsceneMotion, string> = {
+  fade: 'Fade In & Out',
+  typewriter: 'Typewriter Reveal',
+  slam: 'Slam Impact',
+  rise: 'Float Rise',
+  zoom_in: 'Zoom Surge',
+  shake: 'Tremble / Shake',
+  flicker: 'Glitch / Flicker',
+  pulse: 'Rhythmic Pulse',
   spin_cw: 'Spin Clockwise',
   spin_ccw: 'Spin Counter-CW',
-  pulse: 'Rhythmic Pulse',
   expand: 'Shockwave Expand',
   converge: 'Implode / Converge',
   shatter: 'Explosive Shatter',
-  flicker: 'High-Voltage Flicker',
-  slam: 'Slam In',
-  static: 'Still / Static',
+  static: 'Instant / Static',
 };
 
 const FONT_STYLE_LABELS: Record<CutsceneFontStyle, string> = {
@@ -252,10 +257,23 @@ export function CutsceneEditorWorkspace({
   };
 
   const handleAddShape = (shape: CutsceneShapeType) => {
+    const isText = shape === 'custom_text';
+    const defaultStart = Number(
+      Math.min(Math.max(0, cutscene.duration - 0.8), playTimeRef.current).toFixed(1),
+    );
+    const defaultLength = Number(
+      Math.min(cutscene.duration, Math.max(1.2, Math.min(3.5, cutscene.duration * 0.28))).toFixed(1),
+    );
     const el = createCutsceneElement(shape, {
-      color: shape === 'custom_text' ? '#ffffff' : cutscene.primaryColor,
-      secondaryColor:
-        shape === 'custom_text' ? cutscene.primaryColor : cutscene.secondaryColor,
+      color: isText ? '#ffffff' : cutscene.primaryColor,
+      secondaryColor: isText ? cutscene.primaryColor : cutscene.secondaryColor,
+      ...(isText
+        ? {
+            text: 'Custom Text',
+            startTime: defaultStart,
+            duration: defaultLength,
+          }
+        : {}),
     });
     const next = {
       ...cutscene,
@@ -525,7 +543,9 @@ export function CutsceneEditorWorkspace({
                                 el.visible ? 'text-slate-100' : 'text-slate-500 line-through'
                               }`}
                             >
-                              {el.name}
+                              {el.shape === 'custom_text' && el.text?.trim()
+                                ? el.text
+                                : el.name}
                             </span>
                           </div>
                           <div
@@ -580,7 +600,14 @@ export function CutsceneEditorWorkspace({
                         <div className="mt-1 pl-4 text-[10px] text-slate-500 flex items-center gap-1.5 truncate">
                           <span>{CUTSCENE_SHAPE_LABELS[el.shape]}</span>
                           <span>·</span>
-                          <span>{PHASE_LABELS[el.phase]}</span>
+                          <span>
+                            {typeof el.startTime === 'number' && typeof el.duration === 'number'
+                              ? `${el.startTime.toFixed(1)}s–${Math.min(
+                                  cutscene.duration,
+                                  el.startTime + el.duration,
+                                ).toFixed(1)}s (${el.duration.toFixed(1)}s)`
+                              : PHASE_LABELS[el.phase]}
+                          </span>
                         </div>
                       </div>
                     );
@@ -724,7 +751,7 @@ export function CutsceneEditorWorkspace({
                       type="text"
                       value={selectedElement.text ?? ''}
                       maxLength={80}
-                      placeholder="Enter text to show on screen..."
+                      placeholder="Type text to show on screen..."
                       onChange={(e) =>
                         handleUpdateElement(selectedElement.id, { text: e.target.value })
                       }
@@ -754,19 +781,191 @@ export function CutsceneEditorWorkspace({
                 </div>
               )}
 
+              {/* Timing Controls: Always Time & Length for Text, optional toggle for Shapes */}
+              {(() => {
+                const isText = selectedElement.shape === 'custom_text';
+                const hasExactTiming =
+                  isText ||
+                  (typeof selectedElement.startTime === 'number' &&
+                    typeof selectedElement.duration === 'number');
+                const elStart = Math.max(
+                  0,
+                  Math.min(cutscene.duration - 0.1, selectedElement.startTime ?? 0),
+                );
+                const elLen = Math.max(
+                  0.2,
+                  Math.min(cutscene.duration, selectedElement.duration ?? 3.0),
+                );
+                const elEnd = Math.min(cutscene.duration, elStart + elLen);
+                const leftPct = (elStart / Math.max(1, cutscene.duration)) * 100;
+                const widthPct = Math.max(
+                  2,
+                  ((elEnd - elStart) / Math.max(1, cutscene.duration)) * 100,
+                );
+                const climaxPct = climaxRatio * 100;
+                const playheadPct = (playTime / Math.max(1, cutscene.duration)) * 100;
+
+                return (
+                  <div className="space-y-2.5 p-2.5 rounded-lg bg-[#141824] border border-white/[0.08]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-slate-200">
+                        {isText ? 'Text Timing & Length' : 'Timing Mode'}
+                      </span>
+                      {isText ? (
+                        <span className="text-[10px] font-mono-num text-amber-300">
+                          {elStart.toFixed(1)}s → {elEnd.toFixed(1)}s
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleUpdateElement(
+                              selectedElement.id,
+                              hasExactTiming
+                                ? { startTime: undefined, duration: undefined }
+                                : { startTime: 0, duration: Number((cutscene.duration * 0.5).toFixed(1)) },
+                            )
+                          }
+                          className="text-[10px] font-medium text-sky-400 hover:text-sky-300 cursor-pointer"
+                        >
+                          {hasExactTiming ? 'Switch to Phase' : 'Set Exact Time'}
+                        </button>
+                      )}
+                    </div>
+
+                    {hasExactTiming ? (
+                      <>
+                        {/* Mini Visual Timeline */}
+                        <div className="relative h-2.5 rounded-full bg-black/50 border border-white/[0.08] overflow-hidden">
+                          <div
+                            className="absolute top-0 bottom-0 bg-amber-400/75 rounded-full"
+                            style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                          />
+                          <div
+                            className="absolute top-0 bottom-0 w-0.5 bg-rose-400"
+                            style={{ left: `${climaxPct}%` }}
+                            title="Climax Impact"
+                          />
+                          <div
+                            className="absolute top-0 bottom-0 w-0.5 bg-white"
+                            style={{ left: `${playheadPct}%` }}
+                            title="Current Playhead"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] mb-1">
+                            <span className="text-slate-400">Start Time</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateElement(selectedElement.id, {
+                                    startTime: Number(
+                                      Math.min(
+                                        Math.max(0, cutscene.duration - 0.2),
+                                        playTimeRef.current,
+                                      ).toFixed(1),
+                                    ),
+                                  })
+                                }
+                                className="text-[10px] text-amber-400 hover:text-amber-300 cursor-pointer"
+                              >
+                                Use Playhead
+                              </button>
+                              <span className="font-mono-num text-slate-200">
+                                {elStart.toFixed(1)}s
+                              </span>
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(0.2, Number((cutscene.duration - 0.2).toFixed(1)))}
+                            step={0.1}
+                            value={elStart}
+                            onChange={(e) =>
+                              handleUpdateElement(selectedElement.id, {
+                                startTime: parseFloat(e.target.value),
+                                duration: elLen,
+                              })
+                            }
+                            className="w-full studio-slider"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between text-[11px] mb-1">
+                            <span className="text-slate-400">Length (Duration)</span>
+                            <span className="font-mono-num text-slate-200">
+                              {elLen.toFixed(1)}s
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0.2}
+                            max={Number(cutscene.duration.toFixed(1))}
+                            step={0.1}
+                            value={elLen}
+                            onChange={(e) =>
+                              handleUpdateElement(selectedElement.id, {
+                                startTime: elStart,
+                                duration: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full studio-slider"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Phase</label>
+                        <select
+                          value={selectedElement.phase}
+                          onChange={(e) =>
+                            handleUpdateElement(selectedElement.id, {
+                              phase: e.target.value as CutscenePhase,
+                            })
+                          }
+                          className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
+                        >
+                          {CUTSCENE_PHASES.map((p) => (
+                            <option key={p} value={p}>
+                              {PHASE_LABELS[p]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1">Type / Shape</label>
                   <select
                     value={selectedElement.shape}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const nextShape = e.target.value as CutsceneShapeType;
                       handleUpdateElement(selectedElement.id, {
-                        shape: e.target.value as CutsceneShapeType,
-                        ...(e.target.value === 'custom_text' && !selectedElement.text
-                          ? { text: 'THE HEAVENS TREMBLE...' }
+                        shape: nextShape,
+                        ...(nextShape === 'custom_text'
+                          ? {
+                              text: selectedElement.text || 'Custom Text',
+                              motion: 'fade',
+                              startTime:
+                                typeof selectedElement.startTime === 'number'
+                                  ? selectedElement.startTime
+                                  : 0.5,
+                              duration:
+                                typeof selectedElement.duration === 'number'
+                                  ? selectedElement.duration
+                                  : 3.0,
+                            }
                           : {}),
-                      })
-                    }
+                      });
+                    }}
                     className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
                   >
                     {CUTSCENE_SHAPES.map((s) => (
@@ -778,42 +977,25 @@ export function CutsceneEditorWorkspace({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">Phase</label>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    {selectedElement.shape === 'custom_text' ? 'Text Animation' : 'Animation'}
+                  </label>
                   <select
-                    value={selectedElement.phase}
+                    value={selectedElement.motion}
                     onChange={(e) =>
                       handleUpdateElement(selectedElement.id, {
-                        phase: e.target.value as CutscenePhase,
+                        motion: e.target.value as CutsceneMotion,
                       })
                     }
                     className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
                   >
-                    {CUTSCENE_PHASES.map((p) => (
-                      <option key={p} value={p}>
-                        {PHASE_LABELS[p]}
+                    {CUTSCENE_MOTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {MOTION_LABELS[m]}
                       </option>
                     ))}
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">Motion</label>
-                <select
-                  value={selectedElement.motion}
-                  onChange={(e) =>
-                    handleUpdateElement(selectedElement.id, {
-                      motion: e.target.value as CutsceneMotion,
-                    })
-                  }
-                  className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2 py-1.5 text-xs text-slate-100 outline-none"
-                >
-                  {CUTSCENE_MOTIONS.map((m) => (
-                    <option key={m} value={m}>
-                      {MOTION_LABELS[m]}
-                    </option>
-                  ))}
-                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -902,48 +1084,11 @@ export function CutsceneEditorWorkspace({
 
           <hr className="border-white/[0.07]" />
 
-          {/* Optional On-Screen Text & Atmosphere Controls */}
+          {/* Reveal & Atmosphere Controls */}
           <section className="space-y-3">
             <h3 className="text-xs font-semibold text-white">
-              On-Screen Text &amp; Atmosphere
+              Reveal &amp; Atmosphere
             </h3>
-
-            <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-2.5 py-2 cursor-pointer">
-              <div>
-                <div className="text-xs font-medium text-slate-200">
-                  Show Buildup Headline Text
-                </div>
-                <div className="text-[10px] text-slate-400">
-                  Optional whisper quote before climax drop
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0}
-                onChange={(e) =>
-                  commitCutscene({ ...cutscene, showHeadlineText: e.target.checked })
-                }
-                className="accent-amber-500 w-4 h-4 shrink-0"
-              />
-            </label>
-
-            {(cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0) && (
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">
-                  Buildup Headline Text
-                </label>
-                <input
-                  type="text"
-                  value={cutscene.headlineText}
-                  maxLength={80}
-                  placeholder="e.g. A distant star awakens..."
-                  onChange={(e) =>
-                    commitCutscene({ ...cutscene, headlineText: e.target.value })
-                  }
-                  className="w-full bg-[#151a26] border border-white/[0.08] rounded-md px-2.5 py-1.5 text-xs text-white outline-none"
-                />
-              </div>
-            )}
 
             <label className="flex items-center justify-between gap-2 bg-[#141824] border border-white/[0.07] rounded-lg px-2.5 py-2 cursor-pointer">
               <div>

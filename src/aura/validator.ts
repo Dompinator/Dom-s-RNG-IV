@@ -122,6 +122,12 @@ function sanitizeCutsceneConfig(
       ...(typeof el.fontStyle === 'string'
         ? { fontStyle: sanitizeEnum(el.fontStyle, CUTSCENE_FONT_STYLES, 'display') }
         : {}),
+      ...(typeof el.startTime === 'number'
+        ? { startTime: clamp(el.startTime, 0, 30, 0) }
+        : {}),
+      ...(typeof el.duration === 'number'
+        ? { duration: clamp(el.duration, 0.1, 30, 2.5) }
+        : {}),
     });
   }
 
@@ -156,10 +162,7 @@ function sanitizeCutsceneConfig(
     secondaryColor: sanitizeColor(c.secondaryColor, '#38bdf8'),
     backgroundColor: sanitizeColor(c.backgroundColor, '#020308'),
     headlineText,
-    showHeadlineText:
-      typeof c.showHeadlineText === 'boolean'
-        ? c.showHeadlineText
-        : headlineText.length > 0,
+    showHeadlineText: c.showHeadlineText === true,
     showRevealText:
       typeof c.showRevealText === 'boolean' ? c.showRevealText : true,
     shakeIntensity: clamp(c.shakeIntensity, 0, 2.5, tier === 'under_epic' ? 0.75 : 1.5),

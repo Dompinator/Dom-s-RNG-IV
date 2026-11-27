@@ -294,14 +294,19 @@ export const CUTSCENE_PHASES = ['all', 'buildup', 'climax', 'reveal'] as const;
 export type CutscenePhase = (typeof CUTSCENE_PHASES)[number];
 
 export const CUTSCENE_MOTIONS = [
+  'fade',
+  'typewriter',
+  'slam',
+  'rise',
+  'zoom_in',
+  'shake',
+  'flicker',
+  'pulse',
   'spin_cw',
   'spin_ccw',
-  'pulse',
   'expand',
   'converge',
   'shatter',
-  'flicker',
-  'slam',
   'static',
 ] as const;
 export type CutsceneMotion = (typeof CUTSCENE_MOTIONS)[number];
@@ -380,6 +385,8 @@ export interface CutsceneElement {
   rotation: number; // -180 to 180 degrees
   text?: string;
   fontStyle?: CutsceneFontStyle;
+  startTime?: number; // Exact start time in seconds (0 to cutscene.duration)
+  duration?: number; // Exact length in seconds (0.2 to cutscene.duration)
 }
 
 export interface AuraCutsceneConfig {

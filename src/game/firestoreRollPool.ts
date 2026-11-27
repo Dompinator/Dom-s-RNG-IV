@@ -94,6 +94,12 @@ export function buildSanitizedProject(project: AuraProject, safeId: string): Aur
       elements: (safeCutscene.elements ?? []).slice(0, 24).map((el) => ({
         ...el,
         ...(typeof el.text === 'string' ? { text: el.text.slice(0, 80) } : {}),
+        ...(typeof el.startTime === 'number'
+          ? { startTime: Math.max(0, Math.min(30, el.startTime)) }
+          : {}),
+        ...(typeof el.duration === 'number'
+          ? { duration: Math.max(0.1, Math.min(30, el.duration)) }
+          : {}),
       })),
       ...(hasSafeCustomAudio
         ? {

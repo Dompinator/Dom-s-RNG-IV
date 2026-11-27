@@ -90,7 +90,47 @@ function drawShape(
   let alpha = el.opacity;
   let scatter = 0;
 
+  let offsetX = 0;
+  let offsetY = 0;
+  let typewriterRatio = 1;
+  const hasTimedWindow =
+    typeof el.startTime === 'number' && typeof el.duration === 'number';
+  const fadeEdges =
+    clamp01(phaseProgress / 0.16) * clamp01((1 - phaseProgress) / 0.16);
+
   switch (el.motion) {
+    case 'fade':
+      alpha *= fadeEdges;
+      break;
+    case 'typewriter':
+      typewriterRatio = clamp01(phaseProgress / 0.65);
+      alpha *= clamp01((1 - phaseProgress) / 0.14);
+      if (el.shape !== 'custom_text') {
+        scale *= easeOutCubic(typewriterRatio);
+      }
+      break;
+    case 'rise': {
+      const enter = easeOutCubic(Math.min(1, phaseProgress * 2.5));
+      offsetY += lerp(baseUnit * 0.08, -baseUnit * 0.035, phaseProgress);
+      scale *= lerp(0.92, 1.0, enter);
+      alpha *= fadeEdges;
+      break;
+    }
+    case 'zoom_in': {
+      const zT = easeOutCubic(Math.min(1, phaseProgress * 2.4));
+      scale *= lerp(0.18, 1.04, zT);
+      alpha *= clamp01(phaseProgress / 0.12) * clamp01((1 - phaseProgress) / 0.16);
+      break;
+    }
+    case 'shake': {
+      const shakePower = 0.012 * (0.7 + el.speed * 0.45);
+      offsetX += Math.sin(nowSec * 92 + el.id.length * 7) * baseUnit * shakePower;
+      offsetY += Math.cos(nowSec * 109 + el.id.length * 13) * baseUnit * shakePower;
+      if (hasTimedWindow) {
+        alpha *= fadeEdges;
+      }
+      break;
+    }
     case 'spin_cw':
       rot += motionTime * Math.PI * 1.4;
       break;
@@ -99,6 +139,9 @@ function drawShape(
       break;
     case 'pulse':
       scale *= 0.88 + Math.sin(motionTime * Math.PI * 3.2) * 0.22;
+      if (hasTimedWindow && el.shape === 'custom_text') {
+        alpha *= fadeEdges;
+      }
       break;
     case 'expand':
       scale *= 0.25 + easeOutCubic(phaseProgress) * 2.1;
@@ -117,11 +160,14 @@ function drawShape(
       break;
     case 'flicker':
       alpha *= 0.45 + 0.55 * Math.abs(Math.sin(motionTime * 19));
+      if (hasTimedWindow && el.shape === 'custom_text') {
+        alpha *= clamp01((1 - phaseProgress) / 0.12);
+      }
       break;
     case 'slam': {
       const slamT = easeOutCubic(Math.min(1, phaseProgress * 3.5));
-      scale *= lerp(1.8, 1.0, slamT);
-      alpha *= slamT;
+      scale *= lerp(1.9, 1.0, slamT);
+      alpha *= slamT * (hasTimedWindow ? clamp01((1 - phaseProgress) / 0.14) : 1);
       break;
     }
     case 'static':
@@ -139,7 +185,7 @@ function drawShape(
   if (alpha <= 0.01 || r <= 1) return;
 
   ctx.save();
-  ctx.translate(cx, cy);
+  ctx.translate(cx + offsetX, cy + offsetY);
   ctx.rotate(rot);
   if (el.shape !== 'custom_text') {
     ctx.globalCompositeOperation = 'lighter';
@@ -154,8 +200,13 @@ function drawShape(
 
   switch (shape) {
     case 'custom_text': {
-      const label = (el.text ?? '').trim();
-      if (!label) break;
+      const fullLabel = (el.text ?? '').trim();
+      if (!fullLabel) break;
+      const visibleChars =
+        el.motion === 'typewriter'
+          ? Math.max(1, Math.ceil(fullLabel.length * typewriterRatio))
+          : fullLabel.length;
+      const label = fullLabel.slice(0, visibleChars);
       const px = Math.round(Math.max(14, baseUnit * 0.048 * scale));
       const family =
         el.fontStyle === 'serif'
@@ -491,14 +542,21 @@ export function renderCutsceneFrame(
     }
   }
 
-  // 4. Render user's custom cutscene shapes & FX & custom text elements
+  // 4. Render user's custom cutscene shapes & FX & timed custom text elements
+  const currentTimeSec = t * Math.max(1, cutscene.duration);
   for (const el of cutscene.elements) {
     if (!el.visible) continue;
 
     let visibleInPhase = true;
     let phaseProgress = t;
 
-    if (el.phase === 'buildup') {
+    if (typeof el.startTime === 'number' && typeof el.duration === 'number') {
+      const start = Math.max(0, el.startTime);
+      const len = Math.max(0.1, el.duration);
+      const end = start + len;
+      visibleInPhase = currentTimeSec >= start && currentTimeSec <= end;
+      phaseProgress = clamp01((currentTimeSec - start) / len);
+    } else if (el.phase === 'buildup') {
       visibleInPhase = t <= climaxRatio + 0.03;
       phaseProgress = clamp01(t / climaxRatio);
     } else if (el.phase === 'climax') {
@@ -553,11 +611,11 @@ export function renderCutsceneFrame(
     }
   }
 
-  // 7. Optional Built-in Buildup Headline Text & Reveal Title (completely optional!)
+  // 7. Optional Reveal Title (no automatic buildup quote text unless explicitly enabled)
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const showHeadline = cutscene.showHeadlineText ?? cutscene.headlineText.trim().length > 0;
+  const showHeadline = cutscene.showHeadlineText === true;
   if (showHeadline && t < climaxRatio - 0.02 && cutscene.headlineText.trim()) {
     const textAlpha = clamp01(Math.sin((t / climaxRatio) * Math.PI) * 1.45);
     ctx.save();
