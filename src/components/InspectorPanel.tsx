@@ -1,4 +1,5 @@
 import { Music } from 'lucide-react';
+import { getStyleControls } from '../aura/styleControls';
 import {
   ANCHOR_LABELS,
   ANCHOR_POINTS,
@@ -14,6 +15,7 @@ import {
   type LayerAnimationSettings,
   type LayerEffectSettings,
 } from '../aura/types';
+import { LayerExtraSettings, LayerStyleSelector } from './ExtraLayerControls';
 
 interface InspectorPanelProps {
   layer: AuraLayer | null;
@@ -92,6 +94,8 @@ export function InspectorPanel({
   const t = layer.type;
   const s = layer.settings;
   const a = layer.animation;
+  // New types and styles list their own sliders; classic layers keep the originals.
+  const styleControls = getStyleControls(layer);
 
   const showRadius = t !== 'glowing_materials';
   const showSpread = [
@@ -205,6 +209,12 @@ export function InspectorPanel({
             </select>
           </div>
         </section>
+
+        <LayerStyleSelector
+          layer={layer}
+          onUpdateLayer={onUpdateLayer}
+          onUpdateSettings={onUpdateSettings}
+        />
 
         {/* Colors & Texture */}
         <section className="space-y-3">
@@ -341,6 +351,22 @@ export function InspectorPanel({
           <h4 className="text-xs font-semibold text-slate-200">
             Effect Parameters
           </h4>
+
+          {styleControls ? (
+            styleControls.map((c) => (
+              <SliderRow
+                key={c.key}
+                label={c.label}
+                value={s[c.key]}
+                min={c.min}
+                max={c.max}
+                step={c.step}
+                decimals={c.step >= 1 ? 0 : 2}
+                onChange={(val) => onUpdateSettings(layer.id, { [c.key]: val })}
+              />
+            ))
+          ) : (
+            <>
 
           {[
             'particle_systems',
@@ -514,6 +540,9 @@ export function InspectorPanel({
             />
           )}
 
+            </>
+          )}
+
           <div className="flex flex-wrap gap-3 pt-1">
             <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer">
               <input
@@ -539,6 +568,10 @@ export function InspectorPanel({
             </label>
           </div>
         </section>
+
+        <hr className="border-white/[0.07]" />
+
+        <LayerExtraSettings layer={layer} onUpdateSettings={onUpdateSettings} />
 
         <hr className="border-white/[0.07]" />
 

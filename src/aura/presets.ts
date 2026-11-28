@@ -1,3 +1,4 @@
+import { applyLayerVariant, createNewTypeLayer } from './extraDefaults';
 import { classifyBaseOdds } from './rarity';
 import {
   AURA_FORMAT_VERSION,
@@ -11,7 +12,16 @@ function makeId(prefix = 'layer'): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-export function createDefaultLayer(type: EffectType, customName?: string): AuraLayer {
+export function createDefaultLayer(
+  type: EffectType,
+  customName?: string,
+  variant?: string,
+): AuraLayer {
+  const layer = createBaseLayer(type, customName);
+  return applyLayerVariant(layer, variant, customName);
+}
+
+function createBaseLayer(type: EffectType, customName?: string): AuraLayer {
   const base: AuraLayer = {
     id: makeId('lyr'),
     name: customName || 'New Layer',
@@ -324,6 +334,9 @@ export function createDefaultLayer(type: EffectType, customName?: string): AuraL
           opacity: 0.45,
         },
       };
+
+    default:
+      return createNewTypeLayer(base, type, customName);
   }
 }
 

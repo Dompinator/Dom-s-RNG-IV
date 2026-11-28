@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { getProceduralTexture } from '../aura/textures';
 import type { AuraLayer, OrbiterShape } from '../aura/types';
 import type { R6Rig } from './r6Character';
+import { buildExtraLayerRuntime, usesExtraRenderer } from './extra';
+import { createExtraOrbiterGeometry } from './extra/orbiterShapes';
+import { withLayerExtras } from './extra/layerExtras';
 import {
   createDistortionShaderMaterial,
   createEnergySphereShaderMaterial,
@@ -58,6 +61,9 @@ export function getLayerStructuralSignature(layer: AuraLayer): string {
     s.orbiterShape,
     s.wireframe ? 1 : 0,
     s.doubleSided ? 1 : 0,
+    s.variant ?? '',
+    s.formation ?? '',
+    s.symbolText ?? '',
   ].join('|');
 }
 
@@ -65,7 +71,7 @@ function getBlending(layer: AuraLayer): THREE.Blending {
   return layer.blendMode === 'normal' ? THREE.NormalBlending : THREE.AdditiveBlending;
 }
 
-function computeAnimModulation(
+export function computeAnimModulation(
   elapsed: number,
   layer: AuraLayer,
   music?: MusicSyncMetrics,
@@ -123,7 +129,7 @@ function computeAnimModulation(
   }
 }
 
-function computeMusicSpeedScale(
+export function computeMusicSpeedScale(
   layer: AuraLayer,
   music?: MusicSyncMetrics,
 ): number {
@@ -145,7 +151,9 @@ function computeMusicSpeedScale(
   }
 }
 
-function createOrbiterGeometry(shape: OrbiterShape): THREE.BufferGeometry {
+export function createOrbiterGeometry(shape: OrbiterShape): THREE.BufferGeometry {
+  const extra = createExtraOrbiterGeometry(shape);
+  if (extra) return extra;
   switch (shape) {
     case 'sphere':
       return new THREE.SphereGeometry(0.28, 20, 16);
@@ -172,6 +180,17 @@ function createOrbiterGeometry(shape: OrbiterShape): THREE.BufferGeometry {
 }
 
 export function buildLayerRuntime(
+  layer: AuraLayer,
+  rig: R6Rig,
+  maxAnisotropy: number,
+): CompiledLayerRuntime {
+  const runtime = usesExtraRenderer(layer)
+    ? buildExtraLayerRuntime(layer, rig, maxAnisotropy)
+    : buildClassicLayerRuntime(layer, rig, maxAnisotropy);
+  return withLayerExtras(runtime);
+}
+
+function buildClassicLayerRuntime(
   layer: AuraLayer,
   rig: R6Rig,
   maxAnisotropy: number,

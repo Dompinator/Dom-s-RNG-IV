@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { drawExtraTexture } from './extraTextures';
 import type { TextureRef } from './types';
 
 const textureCache = new Map<TextureRef, THREE.CanvasTexture>();
@@ -207,6 +208,8 @@ function drawProceduralTexture(ref: TextureRef, size = 256): HTMLCanvasElement {
       break;
     }
   }
+
+  drawExtraTexture(ctx, ref, size);
 
   canvasCache.set(ref, canvas);
   return canvas;
