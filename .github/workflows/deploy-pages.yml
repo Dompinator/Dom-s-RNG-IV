@@ -1,0 +1,52 @@
+# Builds the latest `main` and publishes it to the `gh-pages` branch.
+# Runs when this branch is pushed; "Re-run all jobs" in the Actions tab redeploys.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [claude/deploy-pages]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: deploy-pages
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - name: Publish to gh-pages
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          sha=$(git rev-parse --short HEAD)
+          git fetch --depth=1 origin gh-pages
+          git worktree add --detach ../pages FETCH_HEAD
+          # The live roll pool is published straight to gh-pages by the app, so keep it.
+          if [ -f ../pages/roll-pool.json ]; then cp ../pages/roll-pool.json dist/roll-pool.json; fi
+          rm -rf ../pages/assets ../pages/index.html
+          cp -r dist/. ../pages/
+          touch ../pages/.nojekyll
+          cd ../pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "Nothing new to deploy"; exit 0; fi
+          git commit -m "Deploy build of main $sha"
+          git push origin HEAD:gh-pages
+      - name: Ask Pages to publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds" || echo "Pages publishes the branch push on its own"
