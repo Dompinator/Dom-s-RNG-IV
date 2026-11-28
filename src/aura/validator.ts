@@ -1,3 +1,4 @@
+import { sanitizeExtraSettings } from './extraSettings';
 import { classifyBaseOdds } from './rarity';
 import {
   ANCHOR_POINTS,
@@ -274,6 +275,7 @@ export function validateAuraProject(raw: unknown): ValidationResult | Validation
         rotationSpeed: sanitizeVec3(animRaw.rotationSpeed, -15, 15, { x: 0, y: 0.8, z: 0 }),
       },
       settings: {
+        ...sanitizeExtraSettings(type, setRaw),
         size: clamp(setRaw.size, 0.05, 8, 1),
         objectScale: clamp(setRaw.objectScale, 0.15, 4, 1),
         intensity: clamp(setRaw.intensity, 0, 6, 1.4),

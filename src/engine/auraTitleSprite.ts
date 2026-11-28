@@ -1,3 +1,4 @@
+import { getExtraLayerExtent } from './extra/extent';
 import * as THREE from 'three';
 import { formatOdds } from '../aura/rarity';
 import type { AuraProject, AuraTitleConfig } from '../aura/types';
@@ -127,6 +128,9 @@ export function computeAuraTopHeight(
         break;
       case 'glowing_materials':
         extentY = 0.35;
+        break;
+      default:
+        extentY = getExtraLayerExtent(layer);
         break;
     }
 

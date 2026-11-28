@@ -1,3 +1,9 @@
+import {
+  EXTRA_EFFECT_TYPES,
+  type ColorMode,
+  type WeaponFormation,
+} from './variants';
+
 export const AURA_FORMAT_VERSION = '1.0.0' as const;
 export const AURA_TARGET_ENGINE = 'doms-rng-iv-aether' as const;
 
@@ -12,6 +18,7 @@ export const EFFECT_TYPES = [
   'distortion_effects',
   'glowing_materials',
   'light_beams',
+  ...EXTRA_EFFECT_TYPES,
 ] as const;
 
 export type EffectType = (typeof EFFECT_TYPES)[number];
@@ -50,6 +57,18 @@ export const TEXTURE_REFS = [
   'spark_streak',
   'vortex_ring',
   'crystal_facet',
+  'petal',
+  'leaf',
+  'snowflake',
+  'bubble',
+  'smoke_puff',
+  'pixel_block',
+  'heart',
+  'star_five',
+  'flame_wisp',
+  'halo_ring',
+  'cross_sparkle',
+  'crescent',
 ] as const;
 
 export type TextureRef = (typeof TEXTURE_REFS)[number];
@@ -72,6 +91,16 @@ export const ORBITER_SHAPES = [
   'shard',
   'cube',
   'torus_knot',
+  'star',
+  'heart',
+  'diamond',
+  'pyramid',
+  'ring',
+  'coin',
+  'crescent',
+  'sword',
+  'cross',
+  'dodecahedron',
 ] as const;
 
 export type OrbiterShape = (typeof ORBITER_SHAPES)[number];
@@ -124,6 +153,22 @@ export interface LayerEffectSettings {
   doubleSided: boolean;
   reverseDirection: boolean;
   tilt: number;
+
+  // Optional customization (absent on older auras)
+  variant?: string;
+  formation?: WeaponFormation;
+  symbolText?: string;
+  colorMode?: ColorMode;
+  colorSpeed?: number;
+  flicker?: number;
+  floatBob?: number;
+  floatSpeed?: number;
+  stretchX?: number;
+  stretchY?: number;
+  stretchZ?: number;
+  layerOrbitRadius?: number;
+  layerOrbitSpeed?: number;
+  fadeCycle?: number;
 }
 
 export interface AuraLayer {
@@ -512,6 +557,78 @@ export const EFFECT_CATALOG: EffectCatalogEntry[] = [
     shortDesc: 'Volumetric god-ray pillars and angled radiance cones',
     defaultTexture: 'soft_orb',
   },
+  {
+    type: 'aura_wings',
+    label: 'Wings',
+    shortDesc: 'Angel, demon, butterfly, crystal, energy, mecha and phoenix wings',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'halo_crowns',
+    label: 'Halos & Crowns',
+    shortDesc: 'Halos, crowns, horns and sun discs above the head',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'magic_circles',
+    label: 'Magic Circles',
+    shortDesc: 'Procedural ground sigils, summoning stars and dials',
+    defaultTexture: 'arcane_rune',
+  },
+  {
+    type: 'floating_weapons',
+    label: 'Floating Weapons',
+    shortDesc: 'Swords, daggers, spears, scythes in five formations',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'singularity',
+    label: 'Singularity & Portals',
+    shortDesc: 'Black holes, portals, galaxies, wormholes and eclipses',
+    defaultTexture: 'plasma_noise',
+  },
+  {
+    type: 'aura_flames',
+    label: 'Flames & Smoke',
+    shortDesc: 'Body-wrapping fire, dark flame, smoke and mist',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'weather',
+    label: 'Weather & Ambience',
+    shortDesc: 'Rain, snow, petals, leaves, bubbles, confetti and more',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'floating_symbols',
+    label: 'Floating Symbols',
+    shortDesc: 'Runes, hearts, music notes, zodiac or your own text',
+    defaultTexture: 'soft_orb',
+  },
+  {
+    type: 'ground_eruption',
+    label: 'Eruptions & Debris',
+    shortDesc: 'Crystal spikes, pillars and levitating rocks',
+    defaultTexture: 'crystal_facet',
+  },
+  {
+    type: 'celestial_bodies',
+    label: 'Celestial Bodies',
+    shortDesc: 'Planets, moons, constellations and pulsars',
+    defaultTexture: 'starburst',
+  },
+  {
+    type: 'shockwaves',
+    label: 'Shockwaves',
+    shortDesc: 'Pulsing ground waves, domes and hex bursts',
+    defaultTexture: 'vortex_ring',
+  },
+  {
+    type: 'chains',
+    label: 'Chains',
+    shortDesc: 'Orbiting, binding, anchored and hanging chains',
+    defaultTexture: 'soft_orb',
+  },
 ];
 
 export const ANCHOR_LABELS: Record<AnchorPoint, string> = {
@@ -534,4 +651,16 @@ export const TEXTURE_LABELS: Record<TextureRef, string> = {
   spark_streak: 'Directional Spark',
   vortex_ring: 'Energy Stream',
   crystal_facet: 'Crystal Facet',
+  petal: 'Blossom Petal',
+  leaf: 'Leaf',
+  snowflake: 'Snowflake',
+  bubble: 'Bubble',
+  smoke_puff: 'Smoke Puff',
+  pixel_block: 'Pixel Block',
+  heart: 'Heart',
+  star_five: 'Five-Point Star',
+  flame_wisp: 'Flame Wisp',
+  halo_ring: 'Soft Ring',
+  cross_sparkle: 'Cross Sparkle',
+  crescent: 'Crescent Moon',
 };

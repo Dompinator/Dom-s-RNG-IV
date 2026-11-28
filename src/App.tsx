@@ -661,8 +661,8 @@ export default function App() {
   );
 
   // Studio Layer Handlers
-  const handleAddLayer = (type: EffectType) => {
-    const newLayer = createDefaultLayer(type);
+  const handleAddLayer = (type: EffectType, variant?: string) => {
+    const newLayer = createDefaultLayer(type, undefined, variant);
     commitChange((prev) => {
       const layers = [newLayer, ...prev.layers];
       return { ...prev, layers, textures: collectUsedTextures(layers) };
